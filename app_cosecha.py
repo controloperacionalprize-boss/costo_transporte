@@ -233,8 +233,7 @@ def procesar_asistencia(file_bytes):
     df.columns = df.columns.str.strip()
     tipo_col = [c for c in df.columns if "TIPO" in c.upper()]
     if not tipo_col:
-        st.error(f"El archivo de asistencia no tiene columna TIPO. Verifica que subiste el archivo correcto. Columnas encontradas: {list(df.columns)[:10]}")
-        st.stop()
+        raise ValueError(f"No se encontró columna TIPO. Columnas: {list(df.columns)[:10]}")
     df_entrada = df[df[tipo_col[0]].astype(str).str.upper() == "ENTRADA"].copy()
     df_entrada["PLACA"] = df_entrada["PLACA"].astype(str).str.strip().str.upper()
     df_entrada["DNI PASA."] = df_entrada["DNI PASA."].astype(str).str.strip()
@@ -252,7 +251,11 @@ if files_viajes and file_asistencia:
     dfs_viajes = [procesar_viajes(f.getvalue()) for f in files_viajes]
     viajes_placa = pd.concat(dfs_viajes, ignore_index=True)
     viajes_placa = viajes_placa.drop_duplicates(subset=["BUS"], keep="first")
-    personas = procesar_asistencia(file_asistencia.getvalue())
+    try:
+        personas = procesar_asistencia(file_asistencia.getvalue())
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
 
     # --- Cruzar rendimiento de jarra si está disponible ---
     df_jarra = st.session_state.get("df_jarra")
