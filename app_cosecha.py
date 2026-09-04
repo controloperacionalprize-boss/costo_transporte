@@ -247,17 +247,24 @@ def procesar_asistencia(file_bytes):
 
 
 if files_viajes and file_asistencia:
-    # Procesar y unir múltiples archivos de viajes
-    dfs_viajes = [procesar_viajes(f.getvalue()) for f in files_viajes]
-    viajes_placa = pd.concat(dfs_viajes, ignore_index=True)
-    viajes_placa = viajes_placa.drop_duplicates(subset=["BUS"], keep="first")
+    try:
+        # Procesar y unir múltiples archivos de viajes
+        dfs_viajes = [procesar_viajes(f.getvalue()) for f in files_viajes]
+        viajes_placa = pd.concat(dfs_viajes, ignore_index=True)
+        viajes_placa = viajes_placa.drop_duplicates(subset=["BUS"], keep="first")
+    except Exception as e:
+        st.error(f"Error procesando viajes: {e}")
+        st.stop()
     try:
         personas = procesar_asistencia(file_asistencia.getvalue())
-    except ValueError as e:
-        st.error(str(e))
+    except Exception as e:
+        st.error(f"Error procesando asistencia: {e}")
         st.stop()
 
+    st.info(f"Viajes: {len(viajes_placa)} buses | Asistencia: {len(personas)} personas")
+
     # --- Cruzar rendimiento de jarra si está disponible ---
+    st.sidebar.write("LOG: Inicio cruce jarras")
     df_jarra = st.session_state.get("df_jarra")
     if df_jarra is not None:
         df_rend = df_jarra[["Dni_Trabajador", "Total Jarras", "FECHA", "SEMANA"]].copy()
@@ -276,6 +283,7 @@ if files_viajes and file_asistencia:
         personas["PROM_JARRAS_SEM"] = personas["PROM_JARRAS_SEM"].fillna(0)
         personas.drop(columns=["DNI_JARRA"], inplace=True, errors="ignore")
 
+    st.sidebar.write("LOG: Jarras cruzado OK")
     # --- Obtener fecha del reporte de asistencia ---
     fecha_reporte = None
     try:
@@ -293,6 +301,7 @@ if files_viajes and file_asistencia:
     except Exception:
         pass
 
+    st.sidebar.write(f"LOG: Fecha reporte = {fecha_reporte}")
     # --- Cruzar actividad principal desde RendimientoCosecha (por fecha) ---
     df_actividad = st.session_state.get("df_actividad")
     if df_actividad is not None:
@@ -325,6 +334,7 @@ if files_viajes and file_asistencia:
         else:
             st.sidebar.warning(f"Columnas actividad no encontradas. Cols: {act_cols[:15]}")
 
+    st.sidebar.write("LOG: Actividad cruzada OK")
     asist_placa = (
         personas.groupby("PLACA")
         .agg(PAS_REAL=("DNI PASA.", "nunique"))
@@ -340,6 +350,7 @@ if files_viajes and file_asistencia:
     )
     cruce = cruce.sort_values("ASIENTOS_VACIOS", ascending=False)
 
+    st.sidebar.write(f"LOG: Cruce OK - {len(cruce)} filas")
     # --- FILTROS ---
     st.markdown("---")
     f1, f2, f3 = st.columns(3)
@@ -369,7 +380,7 @@ if files_viajes and file_asistencia:
     st.subheader("Cruce por PLACA: Capacidad vs Pasajeros Reales")
     st.dataframe(
         df_filtrado[["BUS", "T_BUS", "RUTA", "ZONA_PROCEDENCIA", "CECO", "CAPACIDAD", "PAS_IDA_VIAJES", "PAS_REAL", "ASIENTOS_VACIOS", "% OCUP. REAL", "TARIFA"]].rename(columns={"BUS": "PLACA"}),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -394,7 +405,7 @@ if files_viajes and file_asistencia:
     if has_jarra:
         cols_det.append("PROM_JARRAS_SEM")
 
-    st.dataframe(det[cols_det], use_container_width=True, hide_index=True)
+    st.dataframe(det[cols_det], width="stretch", hide_index=True)
 
     # ==========================================================
     # REBALANCEO: sugerir eliminación de buses con baja ocupación
@@ -504,11 +515,11 @@ if files_viajes and file_asistencia:
 
                         if not reasignados.empty:
                             st.write(f"**{len(reasignados)} personas reasignables** (ordenadas por mayor rendimiento):")
-                            st.dataframe(reasignados, use_container_width=True, hide_index=True)
+                            st.dataframe(reasignados, width="stretch", hide_index=True)
 
                         if not sin_espacio.empty:
                             st.error(f"{len(sin_espacio)} personas sin bus destino disponible")
-                            st.dataframe(sin_espacio[["DNI", "PASAJERO", "PROM_JARRAS_SEM"]], use_container_width=True, hide_index=True)
+                            st.dataframe(sin_espacio[["DNI", "PASAJERO", "PROM_JARRAS_SEM"]], width="stretch", hide_index=True)
 
                         destinos_usados = reasignados["BUS_DESTINO"].unique() if not reasignados.empty else []
                         if len(destinos_usados) > 0:
