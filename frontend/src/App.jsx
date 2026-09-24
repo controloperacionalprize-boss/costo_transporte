@@ -831,6 +831,8 @@ export default function App() {
   const [rutasData, setRutasData] = useState(null);
   const [routeDistances, setRouteDistances] = useState(null);
 
+  const [expandedSector, setExpandedSector] = useState(null);
+
   const [facilito, setFacilito] = useState([]);
   const [facilitoLoading, setFacilitoLoading] = useState(false);
   const [facilitoProgress, setFacilitoProgress] = useState(null);
@@ -967,9 +969,25 @@ export default function App() {
 
   const cruceColumns = useMemo(() => {
     if (cruce.length === 0) return [];
-    const visibleCols = ['BUS', 'T_BUS', 'PROVEEDOR','CAPACIDAD', 'RUTA', 'ZONA_PROCEDENCIA', 'TARIFA', 'PAS_REAL', 'PORCENTAJE_OCUP', 'ASIENTOS_VACIOS', 'COSTO_PASAJERO', 'COSTO_KM', 'PERDIDA'];
+    const visibleCols = ['BUS', 'T_BUS', 'PROVEEDOR','CAPACIDAD', 'RUTA', 'ZONA_PROCEDENCIA', 'TARIFA', 'PAS_REAL', 'PORCENTAJE_OCUP', 'ASIENTOS_VACIOS', 'COSTO_PASAJERO', 'KM', 'COSTO_KM', 'PERDIDA'];
     const headerNames = {'BUS':'Bus','T_BUS':'T. Bus','PROVEEDOR':'Proveedor','CAPACIDAD':'Cap.','RUTA':'Ruta','ZONA_PROCEDENCIA':'Zona','TARIFA':'Tarifa','PAS_REAL':'Pas. Real','PORCENTAJE_OCUP':'% Ocup.','ASIENTOS_VACIOS':'Vacío','COSTO_PASAJERO':'Costo/Pas','COSTO_KM':'S//Km','PERDIDA':'Pérdida'};
     const cols = visibleCols.filter(k => k === 'COSTO_KM' || cruce[0]?.[k] !== undefined).map(k => {
+      if (k === 'KM') {
+        return {
+          field: 'KM',
+          headerName: 'Km',
+          sortable: true, filter: true, resizable: true,
+          minWidth: 75, flex: 1,
+          valueGetter: params => {
+            const zona = (params.data?.ZONA_PROCEDENCIA || '').toUpperCase().trim();
+            const dist = routeDistances?.[zona] || routeDistances?.[params.data?.ZONA_PROCEDENCIA];
+            if (!dist || !dist.distancia_km) return null;
+            return dist.distancia_km;
+          },
+          valueFormatter: params => params.value != null ? `${params.value.toFixed(1)}` : '—',
+          cellStyle: { fontFamily: 'var(--mono)', textAlign: 'right' },
+        };
+      }
       if (k === 'COSTO_KM') {
         return {
           field: 'COSTO_KM',
@@ -1111,28 +1129,35 @@ export default function App() {
 
         {activeTab === 'cosecha' && cruce.length > 0 && (() => {
           const sectorStats = {};
+          const sectorBuses = {};
           filteredCruce.forEach(r => {
             const zona = (r.ZONA_PROCEDENCIA || '').toUpperCase().trim();
             const sector = ZONA_A_SECTOR[zona] || 'OTROS';
-            if (!sectorStats[sector]) sectorStats[sector] = { buses: 0, capacidad: 0, pasajeros: 0 };
+            if (!sectorStats[sector]) { sectorStats[sector] = { buses: 0, capacidad: 0, pasajeros: 0 }; sectorBuses[sector] = []; }
             sectorStats[sector].buses += 1;
             sectorStats[sector].capacidad += (r.CAPACIDAD || 0);
             sectorStats[sector].pasajeros += (r.PAS_REAL || 0);
+            const distInfo = routeDistances?.[zona] || routeDistances?.[r.ZONA_PROCEDENCIA];
+            sectorBuses[sector].push({ ...r, _km: distInfo?.distancia_km || null });
           });
           const sectores = Object.entries(sectorStats).sort((a, b) => b[1].capacidad - a[1].capacidad);
           return <>
             <section style={{ marginBottom: 0 }}>
               <h2 style={{ marginBottom: 12 }}><i className="fa-solid fa-layer-group" style={{ marginRight: 6 }} />Capacidad por Zona</h2>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
                 {sectores.map(([sector, s]) => {
                   const pct = s.capacidad > 0 ? Math.round(s.pasajeros / s.capacidad * 100) : 0;
                   const color = SECTOR_COLORS[sector] || '#6b7280';
+                  const isExpanded = expandedSector === sector;
                   return (
-                    <div key={sector} style={{ flex: '1 1 160px', maxWidth: 220, padding: '12px 16px', borderRadius: 10, background: 'var(--bg-card, #fff)', border: `1.5px solid ${color}30`, position: 'relative', overflow: 'hidden' }}>
+                    <div key={sector} onClick={() => setExpandedSector(isExpanded ? null : sector)} style={{ flex: '1 1 160px', maxWidth: 220, padding: '12px 16px', borderRadius: 10, background: 'var(--bg-card, #fff)', border: `1.5px solid ${isExpanded ? color : color + '30'}`, position: 'relative', overflow: 'hidden', cursor: 'pointer', transition: 'all .15s', boxShadow: isExpanded ? `0 2px 8px ${color}25` : 'none' }}>
                       <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, background: '#e5e7eb' }}>
                         <div style={{ height: '100%', width: `${pct}%`, background: color, transition: 'width .3s' }} />
                       </div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{sector}</div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>{sector}</div>
+                        <i className={`fa-solid fa-chevron-${isExpanded ? 'up' : 'down'}`} style={{ fontSize: 10, color: 'var(--text-dim)' }} />
+                      </div>
                       <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{s.pasajeros}<span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text-dim)' }}>/{s.capacidad}</span></div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
                         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{s.buses} buses</span>
@@ -1142,6 +1167,78 @@ export default function App() {
                   );
                 })}
               </div>
+              {expandedSector && sectorBuses[expandedSector] && (
+                <div style={{ background: 'var(--bg-card, #fff)', border: `1.5px solid ${SECTOR_COLORS[expandedSector] || '#6b7280'}30`, borderRadius: 10, padding: 16, marginBottom: 16, animation: 'fadeIn .2s' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <h3 style={{ margin: 0, fontSize: 14 }}>
+                      <span style={{ color: SECTOR_COLORS[expandedSector] || '#6b7280', marginRight: 6 }}>●</span>
+                      Buses en {expandedSector}
+                      <span style={{ fontSize: 12, fontWeight: 400, color: 'var(--text-dim)', marginLeft: 8 }}>{sectorBuses[expandedSector].length} buses</span>
+                    </h3>
+                    <button onClick={(e) => { e.stopPropagation(); setExpandedSector(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: 'var(--text-dim)' }}>✕</button>
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="mini-table" style={{ width: '100%', fontSize: 12 }}>
+                      <thead>
+                        <tr>
+                          <th>Bus</th>
+                          <th>Zona</th>
+                          <th>Ruta</th>
+                          <th style={{ textAlign: 'right' }}>Cap.</th>
+                          <th style={{ textAlign: 'right' }}>Pas.</th>
+                          <th style={{ textAlign: 'right' }}>% Ocup.</th>
+                          <th style={{ textAlign: 'right' }}>Vacíos</th>
+                          <th style={{ textAlign: 'right' }}>Tarifa</th>
+                          <th style={{ textAlign: 'right' }}>Km</th>
+                          <th style={{ textAlign: 'right' }}>S//Km</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sectorBuses[expandedSector].sort((a, b) => (a.PORCENTAJE_OCUP || 0) - (b.PORCENTAJE_OCUP || 0)).map(r => {
+                          const ocup = r.CAPACIDAD > 0 ? Math.round((r.PAS_REAL || 0) / r.CAPACIDAD * 100) : 0;
+                          const vacios = (r.CAPACIDAD || 0) - (r.PAS_REAL || 0);
+                          const costoKm = r._km && r._km > 0 ? ((r.TARIFA || 0) / r._km).toFixed(2) : '—';
+                          return (
+                            <tr key={r.BUS}>
+                              <td style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.BUS}</td>
+                              <td>{r.ZONA_PROCEDENCIA}</td>
+                              <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.RUTA}</td>
+                              <td style={{ textAlign: 'right', color: 'var(--green)', fontWeight: 600 }}>{r.CAPACIDAD}</td>
+                              <td style={{ textAlign: 'right' }}>{r.PAS_REAL || 0}</td>
+                              <td style={{ textAlign: 'right', fontWeight: 700, color: ocup >= 80 ? 'var(--green)' : ocup >= 50 ? '#ca8a04' : 'var(--red)' }}>{ocup}%</td>
+                              <td style={{ textAlign: 'right', color: vacios > 0 ? 'var(--red)' : 'var(--green)' }}>{Math.max(vacios, 0)}</td>
+                              <td style={{ textAlign: 'right', fontFamily: 'var(--mono)' }}>S/{(r.TARIFA || 0).toLocaleString('es-PE')}</td>
+                              <td style={{ textAlign: 'right', fontFamily: 'var(--mono)' }}>{r._km ? r._km.toFixed(1) : '—'}</td>
+                              <td style={{ textAlign: 'right', fontFamily: 'var(--mono)', fontWeight: 600 }}>{costoKm !== '—' ? `S/${costoKm}` : '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        {(() => {
+                          const buses = sectorBuses[expandedSector];
+                          const totCap = buses.reduce((s, r) => s + (r.CAPACIDAD || 0), 0);
+                          const totPas = buses.reduce((s, r) => s + (r.PAS_REAL || 0), 0);
+                          const totVacios = Math.max(totCap - totPas, 0);
+                          const avgOcup = totCap > 0 ? Math.round(totPas / totCap * 100) : 0;
+                          const totTarifa = buses.reduce((s, r) => s + (r.TARIFA || 0), 0);
+                          return (
+                            <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+                              <td colSpan={3}>TOTAL / PROMEDIO</td>
+                              <td style={{ textAlign: 'right' }}>{totCap}</td>
+                              <td style={{ textAlign: 'right' }}>{totPas}</td>
+                              <td style={{ textAlign: 'right', color: avgOcup >= 80 ? 'var(--green)' : avgOcup >= 50 ? '#ca8a04' : 'var(--red)' }}>{avgOcup}%</td>
+                              <td style={{ textAlign: 'right', color: 'var(--red)' }}>{totVacios}</td>
+                              <td style={{ textAlign: 'right', fontFamily: 'var(--mono)' }}>S/{totTarifa.toLocaleString('es-PE')}</td>
+                              <td colSpan={2}></td>
+                            </tr>
+                          );
+                        })()}
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
             </section>
 
             <section>
