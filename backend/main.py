@@ -199,6 +199,170 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # DATABASE (PostgreSQL) endpoints
 # ---------------------------------------------------------------------------
 
+def _ensure_session_data(sess: dict):
+    """Re-load and process data from DB if session is empty (Vercel serverless fix)."""
+    if sess.get("cruce") is not None and sess.get("personas_enriched") is not None:
+        return
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute('SELECT MAX("FECHA") FROM rpt_controlbus_asistencia')
+    row = cur.fetchone()
+    if not row or not row[0]:
+        conn.close()
+        return
+    fecha = str(row[0])
+
+    _load_db_data_sync(sess, conn, fecha, "", "", "")
+    conn.close()
+
+    if sess.get("viajes_placa") is not None and sess.get("personas") is not None:
+        _run_process_sync(sess)
+
+
+def _load_db_data_sync(sess, conn, fecha, fecha_desde, fecha_hasta, empresa):
+    """Synchronous DB load for serverless (no threading)."""
+    cur = conn.cursor()
+
+    def _find_col(cols, *keywords):
+        for c in cols:
+            for kw in keywords:
+                if kw.lower() in c.lower():
+                    return c
+        return None
+
+    # Jarras
+    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'rpt_formato_jarra_aq1' ORDER BY ordinal_position")
+    jarra_cols = [r[0] for r in cur.fetchall()]
+    col_dni = _find_col(jarra_cols, "dni", "documento", "trabajador_dni")
+    col_nombre = _find_col(jarra_cols, "trabajador", "nombre")
+    col_jarras = _find_col(jarra_cols, "jarras", "total")
+    col_fecha = _find_col(jarra_cols, "fecha")
+    col_semana = _find_col(jarra_cols, "semana")
+    if col_dni and col_jarras:
+        select_cols = ", ".join(f'"{c}"' for c in [col_dni, col_nombre, col_jarras, col_fecha, col_semana] if c)
+        fecha_filter = f'WHERE "{col_fecha}" >= CURRENT_DATE - INTERVAL \'14 days\'' if col_fecha else ""
+        df_jarra = pd.read_sql(f"SELECT {select_cols} FROM (SELECT {select_cols} FROM rpt_formato_jarra_aq1 UNION ALL SELECT {select_cols} FROM rpt_formato_jarra_aq2) j {fecha_filter}", conn)
+        rename_j = {col_dni: "Dni_Trabajador", col_jarras: "Total Jarras", col_semana: "SEMANA"}
+        if col_nombre: rename_j[col_nombre] = "Trabajador"
+        if col_fecha: rename_j[col_fecha] = "FECHA"
+        df_jarra.rename(columns=rename_j, inplace=True)
+        sess["df_jarra"] = df_jarra
+
+    # Horas/Actividad
+    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'rpt_formato_horas_aq1' ORDER BY ordinal_position")
+    horas_cols = [r[0] for r in cur.fetchall()]
+    col_h_dni = _find_col(horas_cols, "documento", "dni")
+    col_h_act = next((c for c in horas_cols if c.strip().lower() == "actividad"), None) or _find_col(horas_cols, "actividad", "labor")
+    col_h_fecha = _find_col(horas_cols, "fecha")
+    col_h_nombre = next((c for c in horas_cols if c.strip().lower() == "trabajador"), None) or _find_col(horas_cols, "nombre")
+    if col_h_dni and col_h_act:
+        h_select = ", ".join(f'"{c}"' for c in [col_h_dni, col_h_act, col_h_fecha, col_h_nombre] if c)
+        where_h = f'WHERE "{col_h_fecha}" >= CURRENT_DATE - INTERVAL \'14 days\'' if col_h_fecha else ""
+        df_actividad = pd.read_sql(f"SELECT {h_select} FROM (SELECT {h_select} FROM rpt_formato_horas_aq1 UNION ALL SELECT {h_select} FROM rpt_formato_horas_aq2) h {where_h}", conn)
+        rename_h = {col_h_dni: "Documento", col_h_act: "ACTIVIDAD"}
+        if col_h_fecha: rename_h[col_h_fecha] = "FECHA"
+        if col_h_nombre: rename_h[col_h_nombre] = "TRABAJADOR"
+        df_actividad.rename(columns=rename_h, inplace=True)
+        sess["df_actividad"] = df_actividad
+
+    # Asistencia
+    fecha_where = f""""FECHA" = '{fecha}'"""
+    empresa_where = f""" AND "EMPRESA" = '{empresa}'""" if empresa else ""
+    df_asist = pd.read_sql(f'SELECT "PLACA", "DNI PASA", "PASAJERO", "KILOS", "HORA", "TIPO", "FECHA" FROM rpt_controlbus_asistencia WHERE {fecha_where}{empresa_where}', conn)
+    df_asist.columns = ["PLACA", "DNI PASA.", "PASAJERO", "KILOS", "HORA", "TIPO", "FECHA"]
+    df_entrada = df_asist[df_asist["TIPO"].astype(str).str.upper() == "ENTRADA"].copy()
+    df_entrada["PLACA"] = df_entrada["PLACA"].astype(str).str.strip().str.upper()
+    df_entrada["DNI PASA."] = df_entrada["DNI PASA."].astype(str).str.strip()
+    df_entrada["KILOS"] = pd.to_numeric(df_entrada["KILOS"], errors="coerce").fillna(0)
+    personas_db = df_entrada.sort_values("HORA")[["PLACA", "DNI PASA.", "PASAJERO", "KILOS", "FECHA"]].copy()
+    try:
+        dni_list = personas_db["DNI PASA."].dropna().unique().tolist()
+        if len(dni_list) > 0:
+            placeholders = ",".join([f"'{d}'" for d in dni_list])
+            df_func = pd.read_sql(f"SELECT payload->>'DNI' AS dni, payload->>'COLABORADOR' AS colaborador, payload->>'CARGO' AS cargo, payload->>'ÁREA' AS area FROM qbiz_funcionarios_raw WHERE payload->>'DNI' IN ({placeholders})", conn)
+            df_func["dni"] = df_func["dni"].astype(str).str.strip()
+            df_func = df_func.drop_duplicates(subset=["dni"], keep="first")
+            personas_db = personas_db.merge(df_func, left_on="DNI PASA.", right_on="dni", how="left")
+            personas_db["PASAJERO"] = personas_db["colaborador"].fillna(personas_db["PASAJERO"])
+            personas_db.drop(columns=["dni", "colaborador"], inplace=True, errors="ignore")
+    except Exception:
+        pass
+    sess["personas"] = personas_db
+    sess["asistencia_from_db"] = True
+
+    # Viajes
+    viajes_emp_where = f""" AND "EMPRESA" = '{empresa}'""" if empresa else ""
+    df_viajes_raw = pd.read_sql(f"""SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR" FROM (SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR" FROM rpt_controlbus_viajes_aq1 UNION ALL SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR" FROM rpt_controlbus_viajes_aq2) v WHERE {fecha_where}{viajes_emp_where}""", conn)
+    df_viajes_raw["NRO. PAS. IDA"] = pd.to_numeric(df_viajes_raw["NRO. PAS. IDA"], errors="coerce").fillna(0).astype(int)
+    df_viajes_raw = df_viajes_raw[(df_viajes_raw["NRO. PAS. IDA"] != 0) & (df_viajes_raw["CECO"].astype(str).str.contains("COSECHA", case=False, na=False))].copy()
+    df_viajes_raw["BUS"] = df_viajes_raw["BUS"].astype(str).str.strip().str.upper()
+    df_viajes_raw["CAPACIDAD"] = pd.to_numeric(df_viajes_raw["CAPACIDAD"], errors="coerce").fillna(0).astype(int)
+    df_viajes_raw["RUTA"] = df_viajes_raw["RUTA"].fillna("").astype(str).str.strip().replace({"nan": "", "None": ""})
+    df_viajes_raw["RUTA"] = df_viajes_raw["RUTA"].apply(_normalizar_ruta)
+    viajes_placa = df_viajes_raw.groupby("BUS").agg(CAPACIDAD=("CAPACIDAD", "first"), PAS_IDA_VIAJES=("NRO. PAS. IDA", "sum"), ZONA_PROCEDENCIA=("ZONA PROCEDENCIA", "first"), CECO=("CECO", "first"), T_BUS=("T.BUS", "first"), RUTA=("RUTA", "first"), TARIFA=("TARIFA", "sum"), EMPRESA=("EMPRESA", "first"), PROVEEDOR=("PROVEEDOR", "first"), PORCENTAJE_OCUP=("PORCENTAJE OCUP", "first")).reset_index()
+    _DESTINOS_AQ2 = {"VIVADIS", "SANTA TERESA", "AYLLU ALLPA"}
+    def _planta(ruta):
+        if "=>" in str(ruta):
+            d = str(ruta).split("=>")[1].strip().upper()
+            if d in _DESTINOS_AQ2: return "AQ2"
+        return "AQ1"
+    viajes_placa["PLANTA"] = viajes_placa["RUTA"].apply(_planta)
+    sess["viajes_placa"] = viajes_placa
+    sess["viajes_from_db"] = True
+
+
+def _run_process_sync(sess):
+    """Run the cruce/process logic synchronously."""
+    viajes_placa = sess["viajes_placa"]
+    personas = sess["personas"].copy()
+
+    df_jarra = sess.get("df_jarra")
+    if df_jarra is not None:
+        jarra_cols_available = [c for c in ["Dni_Trabajador", "Total Jarras", "FECHA"] if c in df_jarra.columns]
+        df_rend = df_jarra[jarra_cols_available].copy()
+        df_rend.columns = ["DNI_JARRA", "JARRAS"] + (["FECHA_JARRA"] if "FECHA" in jarra_cols_available else [])
+        df_rend["DNI_JARRA"] = df_rend["DNI_JARRA"].astype(str).str.strip()
+        df_rend["JARRAS"] = pd.to_numeric(df_rend["JARRAS"], errors="coerce").fillna(0)
+        if "FECHA_JARRA" in df_rend.columns:
+            jarras_dia = df_rend.groupby(["DNI_JARRA", "FECHA_JARRA"]).agg(JARRAS_DIA=("JARRAS", "sum")).reset_index()
+            jarras_prom = jarras_dia.groupby("DNI_JARRA").agg(PROM_JARRAS_SEM=("JARRAS_DIA", "mean")).reset_index()
+        else:
+            jarras_prom = df_rend.groupby("DNI_JARRA").agg(PROM_JARRAS_SEM=("JARRAS", "mean")).reset_index()
+        jarras_prom["PROM_JARRAS_SEM"] = jarras_prom["PROM_JARRAS_SEM"].round(1)
+        personas = personas.merge(jarras_prom, left_on="DNI PASA.", right_on="DNI_JARRA", how="left")
+        personas["PROM_JARRAS_SEM"] = personas["PROM_JARRAS_SEM"].fillna(0)
+        personas.drop(columns=["DNI_JARRA"], inplace=True, errors="ignore")
+
+    df_actividad = sess.get("df_actividad")
+    if df_actividad is not None:
+        df_act = df_actividad.copy()
+        df_act.columns = df_act.columns.str.strip()
+        act_cols = df_act.columns.tolist()
+        dni_col_act = next((c for c in act_cols if "DOCUMENTO" in c.upper() or "DNI" in c.upper()), None)
+        act_col = next((c for c in act_cols if "ACTIVIDAD" in c.upper() or "LABOR" in c.upper()), None)
+        if dni_col_act and act_col:
+            df_act[dni_col_act] = df_act[dni_col_act].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            personas["DNI PASA."] = personas["DNI PASA."].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            act_moda = df_act.groupby(dni_col_act)[act_col].agg(lambda x: x.value_counts().index[0] if len(x.value_counts()) > 0 else "").reset_index()
+            act_moda.columns = ["DNI_ACT", "ACTIVIDAD"]
+            personas = personas.merge(act_moda, left_on="DNI PASA.", right_on="DNI_ACT", how="left")
+            personas["ACTIVIDAD"] = personas["ACTIVIDAD"].fillna("")
+            personas.drop(columns=["DNI_ACT"], inplace=True, errors="ignore")
+
+    asist_placa = personas.groupby("PLACA").agg(PAS_REAL=("DNI PASA.", "count")).reset_index()
+    cruce = viajes_placa.merge(asist_placa, left_on="BUS", right_on="PLACA", how="left")
+    cruce["PAS_REAL"] = cruce["PAS_REAL"].fillna(0).astype(int)
+    cruce["ASIENTOS_VACIOS"] = cruce["CAPACIDAD"] - cruce["PAS_REAL"]
+    cruce["% OCUP. REAL"] = cruce.apply(lambda r: round(r["PAS_REAL"] / r["CAPACIDAD"] * 100, 1) if r["CAPACIDAD"] > 0 else 0, axis=1)
+    cruce["COSTO_PASAJERO"] = cruce.apply(lambda r: round(r["TARIFA"] / r["PAS_REAL"], 2) if r["PAS_REAL"] > 0 else 0, axis=1)
+    cruce["PERDIDA"] = cruce.apply(lambda r: round((r["TARIFA"] / r["CAPACIDAD"]) * r["ASIENTOS_VACIOS"], 2) if r["CAPACIDAD"] > 0 else 0, axis=1)
+    cruce = cruce.fillna({"RUTA": "", "ZONA_PROCEDENCIA": "", "CECO": "", "T_BUS": "", "PROVEEDOR": "", "PORCENTAJE_OCUP": 0})
+    cruce = cruce.sort_values("ASIENTOS_VACIOS", ascending=False)
+
+    sess["cruce"] = cruce
+    sess["personas_enriched"] = personas
+
+
 def _get_db_conn():
     return psycopg2.connect(
         host=os.getenv("DB_HOST"),
@@ -555,6 +719,10 @@ def process(req: ProcessRequest):
     viajes_placa = sess.get("viajes_placa")
     personas = sess.get("personas")
     if viajes_placa is None or personas is None:
+        _ensure_session_data(sess)
+        viajes_placa = sess.get("viajes_placa")
+        personas = sess.get("personas")
+    if viajes_placa is None or personas is None:
         raise HTTPException(status_code=400, detail="Upload viajes and asistencia first")
 
     personas = personas.copy()
@@ -790,10 +958,11 @@ def _build_route_proximity(cruce, max_desvio_km=15):
 def rebalanceo(req: RebalanceoRequest):
     sess = get_session(req.session_id)
     umbral = req.umbral
+    _ensure_session_data(sess)
     cruce = sess.get("cruce")
     personas = sess.get("personas_enriched")
     if cruce is None or personas is None:
-        raise HTTPException(status_code=400, detail="Run /api/process first")
+        raise HTTPException(status_code=400, detail="No data available")
 
     if "PROM_JARRAS_SEM" not in personas.columns:
         personas["PROM_JARRAS_SEM"] = 0
@@ -990,10 +1159,11 @@ DESTINOS_PLANTA = {
 @app.get("/api/rutas-mapa")
 def rutas_mapa(session_id: str = Query("default")):
     sess = get_session(session_id)
+    _ensure_session_data(sess)
     cruce = sess.get("cruce")
     viajes_placa = sess.get("viajes_placa")
     if cruce is None or viajes_placa is None:
-        raise HTTPException(status_code=400, detail="Run /api/process first")
+        raise HTTPException(status_code=400, detail="No data available")
 
     rutas = []
     for _, row in cruce.iterrows():
