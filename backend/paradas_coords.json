@@ -1,0 +1,636 @@
+{
+  "CASA GRANDE": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.7445661,
+      "lng": -79.1879269
+    },
+    {
+      "nombre": "CRUCE ROMA",
+      "lat": -7.7446,
+      "lng": -79.1881
+    }
+  ],
+  "CHOCOPE": [
+    {
+      "nombre": "CRUCE CASAGRANDE",
+      "lat": -7.79112,
+      "lng": -79.21774
+    },
+    {
+      "nombre": "PARQUE \"LEON\"",
+      "lat": -7.789387949192432,
+      "lng": -79.22074
+    },
+    {
+      "nombre": "CEMENTERIO",
+      "lat": -7.792852050807569,
+      "lng": -79.22074
+    }
+  ],
+  "PAIJAN": [
+    {
+      "nombre": "CHUIN",
+      "lat": -7.7498072,
+      "lng": -79.2829283
+    },
+    {
+      "nombre": "LICAPA",
+      "lat": -7.737278,
+      "lng": -79.271779
+    },
+    {
+      "nombre": "GRIFO MIRAFLORES",
+      "lat": -7.73419,
+      "lng": -79.3009
+    },
+    {
+      "nombre": "PLAZUELA MIRAFLORES",
+      "lat": -7.73219,
+      "lng": -79.3029
+    },
+    {
+      "nombre": "TERMINAL",
+      "lat": -7.7319671,
+      "lng": -79.3030458
+    },
+    {
+      "nombre": "CEMENTERIO",
+      "lat": -7.7274746,
+      "lng": -79.3055147
+    },
+    {
+      "nombre": "COMISARIA",
+      "lat": -7.7181120235015825,
+      "lng": -79.30919546837443
+    },
+    {
+      "nombre": "REOPA",
+      "lat": -7.73619,
+      "lng": -79.3029
+    }
+  ],
+  "PACASMAYO": [
+    {
+      "nombre": "LAS PALMERAS",
+      "lat": -7.3969,
+      "lng": -79.56432000000001
+    },
+    {
+      "nombre": "TOTTUS",
+      "lat": -7.3992157,
+      "lng": -79.5670194
+    },
+    {
+      "nombre": "LETRAS PACASMAYO(SALIDA)",
+      "lat": -7.3949,
+      "lng": -79.56632
+    },
+    {
+      "nombre": "FABRICA CEMENTO",
+      "lat": -7.3969,
+      "lng": -79.56832
+    },
+    {
+      "nombre": "CRUCE EL MILAGRO",
+      "lat": -7.398899999999999,
+      "lng": -79.56632
+    }
+  ],
+  "SANTIAGO DE CAO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.95611,
+      "lng": -79.23776000000001
+    },
+    {
+      "nombre": "SRA BLANCA",
+      "lat": -7.95411,
+      "lng": -79.23976
+    },
+    {
+      "nombre": "LA CRUZ",
+      "lat": -7.95611,
+      "lng": -79.24176
+    },
+    {
+      "nombre": "MALCA",
+      "lat": -7.95811,
+      "lng": -79.23976
+    }
+  ],
+  "ROMA": [
+    {
+      "nombre": "PLAZUELA CENTRAL",
+      "lat": -7.7624797,
+      "lng": -79.1463868
+    },
+    {
+      "nombre": "CINE",
+      "lat": -7.7648729,
+      "lng": -79.1476931
+    }
+  ],
+  "LIMONCARRO/ MARISCAL": [
+    {
+      "nombre": "MARISCAL",
+      "lat": -7.3019945,
+      "lng": -79.4083528
+    }
+  ],
+  "CHICAMA": [
+    {
+      "nombre": "AAHH ALAN GARCIA",
+      "lat": -7.84799,
+      "lng": -79.13829
+    },
+    {
+      "nombre": "PARADERO CHICAMA",
+      "lat": -7.846257949192432,
+      "lng": -79.14129
+    },
+    {
+      "nombre": "PARADERO CHICLIN",
+      "lat": -7.849722050807569,
+      "lng": -79.14129
+    }
+  ],
+  "CIUDAD DE DIOS": [
+    {
+      "nombre": "ARCO DE CIUDAD",
+      "lat": -7.299663633555787,
+      "lng": -79.48137443840217
+    },
+    {
+      "nombre": "PUENTE LIBERTAD",
+      "lat": -7.3248532,
+      "lng": -79.4808576
+    }
+  ],
+  "PUERTO MALABRIGO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.70206,
+      "lng": -79.437209
+    },
+    {
+      "nombre": "GRIFO PETROPERU",
+      "lat": -7.70017,
+      "lng": -79.43182
+    },
+    {
+      "nombre": "EL PARAISO",
+      "lat": -7.698606337035064,
+      "lng": -79.43257302039628
+    },
+    {
+      "nombre": "SANTA ROSA",
+      "lat": -7.698220144175636,
+      "lng": -79.4342650418679
+    },
+    {
+      "nombre": "LA PERLA",
+      "lat": -7.699302232521765,
+      "lng": -79.4356219377358
+    },
+    {
+      "nombre": "MONTESECO",
+      "lat": -7.701037767478235,
+      "lng": -79.4356219377358
+    },
+    {
+      "nombre": "LA CORLIB",
+      "lat": -7.702119855824364,
+      "lng": -79.4342650418679
+    },
+    {
+      "nombre": "REOPA",
+      "lat": -7.701733662964936,
+      "lng": -79.43257302039628
+    }
+  ],
+  "SAN PEDRO DE LLOC": [
+    {
+      "nombre": "GRIFO PECSA SANTA LUCIA",
+      "lat": -7.42502,
+      "lng": -79.5013
+    },
+    {
+      "nombre": "EMTRAFESA",
+      "lat": -7.4325473,
+      "lng": -79.5007647
+    },
+    {
+      "nombre": "CASIQUE",
+      "lat": -7.42502,
+      "lng": -79.50529999999999
+    }
+  ],
+  "CARTAVIO": [
+    {
+      "nombre": "PLAZUELA CONCORDIA",
+      "lat": -7.8889329,
+      "lng": -79.2211476
+    },
+    {
+      "nombre": "CALLE REAL",
+      "lat": -7.8887223,
+      "lng": -79.2206878
+    },
+    {
+      "nombre": "COMISARIA",
+      "lat": -7.8865801,
+      "lng": -79.2205454
+    }
+  ],
+  "JEQUETEPEQUE": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.337929292586088,
+      "lng": -79.56393247353924
+    }
+  ],
+  "MAZANCA": [
+    {
+      "nombre": "PLAZUELA",
+      "lat": -7.3776741,
+      "lng": -79.4795286
+    }
+  ],
+  "ALTO TRUJILLO": [
+    {
+      "nombre": "DINOES",
+      "lat": -8.05928,
+      "lng": -79.01036
+    },
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.062761,
+      "lng": -79.009983
+    },
+    {
+      "nombre": "PACHELI",
+      "lat": -8.057547949192431,
+      "lng": -79.01136
+    },
+    {
+      "nombre": "PAMPON",
+      "lat": -8.057547949192431,
+      "lng": -79.01336
+    },
+    {
+      "nombre": "SALAVERRY",
+      "lat": -8.05928,
+      "lng": -79.01436
+    },
+    {
+      "nombre": "CAIPO",
+      "lat": -8.061012050807568,
+      "lng": -79.01336
+    },
+    {
+      "nombre": "DONSA",
+      "lat": -8.061012050807568,
+      "lng": -79.01136
+    }
+  ],
+  "LA ESPERANZA": [
+    {
+      "nombre": "NUEVO JERUSALEN",
+      "lat": -8.0722027,
+      "lng": -79.0347976
+    },
+    {
+      "nombre": "PARQUE DE SOANA",
+      "lat": -8.06526,
+      "lng": -79.05954
+    },
+    {
+      "nombre": "CEMENTERIO",
+      "lat": -8.0697479,
+      "lng": -79.0423802
+    },
+    {
+      "nombre": "CAMAL",
+      "lat": -8.060645,
+      "lng": -79.0481895
+    },
+    {
+      "nombre": "COLEGIO MILITAR DE LAS PALMERAS",
+      "lat": -8.06326,
+      "lng": -79.06154
+    },
+    {
+      "nombre": "LOS 4 SUYOS",
+      "lat": -8.06526,
+      "lng": -79.06353999999999
+    },
+    {
+      "nombre": "ÓVALO EL MILAGRO",
+      "lat": -8.067260000000001,
+      "lng": -79.06154
+    }
+  ],
+  "PACANGUILLA": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.1569,
+      "lng": -79.44307
+    },
+    {
+      "nombre": "COLEGIO",
+      "lat": -7.155167949192432,
+      "lng": -79.44607
+    },
+    {
+      "nombre": "ROMPEMUELLE PANAMERICANA",
+      "lat": -7.158632050807569,
+      "lng": -79.44607
+    }
+  ],
+  "EL MILAGRO": [
+    {
+      "nombre": "CAJABAMBINO",
+      "lat": -8.02305,
+      "lng": -79.06533
+    },
+    {
+      "nombre": "LA 45",
+      "lat": -8.0333724,
+      "lng": -79.054423
+    },
+    {
+      "nombre": "VADEN",
+      "lat": -8.021317949192431,
+      "lng": -79.06833
+    },
+    {
+      "nombre": "POSTE AZUL",
+      "lat": -8.024782050807568,
+      "lng": -79.06833
+    }
+  ],
+  "EL PORVENIR": [
+    {
+      "nombre": "MARIATEGUI",
+      "lat": -8.0864415,
+      "lng": -79.0026906
+    },
+    {
+      "nombre": "CONSEJO",
+      "lat": -8.08682,
+      "lng": -79.00160000000001
+    },
+    {
+      "nombre": "LA PIP",
+      "lat": -8.085405786437626,
+      "lng": -79.00218578643764
+    },
+    {
+      "nombre": "EL MECHE",
+      "lat": -8.084819999999999,
+      "lng": -79.0036
+    },
+    {
+      "nombre": "REVOLUCIÓN",
+      "lat": -8.079739,
+      "lng": -78.9932435
+    },
+    {
+      "nombre": "LA VICTORIA",
+      "lat": -8.0712578,
+      "lng": -78.990745
+    },
+    {
+      "nombre": "DINOES",
+      "lat": -8.085405786437626,
+      "lng": -79.00501421356238
+    },
+    {
+      "nombre": "VIRGEN DEL CARMEN",
+      "lat": -8.0671837,
+      "lng": -78.9860368
+    },
+    {
+      "nombre": "PARROQUIA",
+      "lat": -8.08682,
+      "lng": -79.0056
+    },
+    {
+      "nombre": "JARDÍN NUEVO",
+      "lat": -8.088234213562373,
+      "lng": -79.00501421356238
+    },
+    {
+      "nombre": "TRES FARMACIAS",
+      "lat": -8.08882,
+      "lng": -79.0036
+    },
+    {
+      "nombre": "CAMBIO NOVENTA",
+      "lat": -8.088234213562373,
+      "lng": -79.00218578643764
+    },
+    {
+      "nombre": "WICHANZAO",
+      "lat": -8.0647831,
+      "lng": -78.9933039
+    }
+  ],
+  "SEMAN": [
+    {
+      "nombre": "LOZA DEPORTIVA",
+      "lat": -7.785,
+      "lng": -79.215
+    }
+  ],
+  "GUADALUPE": [
+    {
+      "nombre": "AHUMADA",
+      "lat": -7.24321,
+      "lng": -79.46859
+    },
+    {
+      "nombre": "TERMINAL - VIA",
+      "lat": -7.241477949192432,
+      "lng": -79.47159
+    },
+    {
+      "nombre": "PARADERO CAFETAL",
+      "lat": -7.244942050807569,
+      "lng": -79.47159
+    },
+    {
+      "nombre": "GRIFO LA ESPERANZA",
+      "lat": -7.2491923,
+      "lng": -79.4791196
+    }
+  ],
+  "CHEQUEN": [
+    {
+      "nombre": "PARQUE DE LA AMISTAD",
+      "lat": -7.22884333748731,
+      "lng": -79.4103921677075
+    },
+    {
+      "nombre": "LA CUCHILLA",
+      "lat": -7.22694,
+      "lng": -79.41178
+    },
+    {
+      "nombre": "Jr. ATAHUALPA",
+      "lat": -7.22764,
+      "lng": -79.41239
+    },
+    {
+      "nombre": "Jr. AMERICA",
+      "lat": -7.23004,
+      "lng": -79.41239
+    },
+    {
+      "nombre": "GRIFO PECSA",
+      "lat": -7.23074,
+      "lng": -79.40900
+    }
+  ],
+  "CHICLAYO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -6.835807,
+      "lng": -79.9357294
+    }
+  ],
+  "CHIQUITOY": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.9261793,
+      "lng": -79.2098667
+    }
+  ],
+  "SALAVERRY": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.2241544,
+      "lng": -78.9763889
+    }
+  ],
+  "VIRÚ": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.4165648,
+      "lng": -78.7518716
+    }
+  ],
+  "ALTO MOCHE": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.1835285,
+      "lng": -78.9896218
+    }
+  ],
+  "CHEPÉN": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.2271954,
+      "lng": -79.429703
+    }
+  ],
+  "PAMPAS DE JAGUEY": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.6609907,
+      "lng": -78.9488785
+    }
+  ],
+  "SINTUCO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.8116979,
+      "lng": -79.1995111
+    }
+  ],
+  "SAUSAL": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.7320975,
+      "lng": -79.0051685
+    }
+  ],
+  "CHEPEN": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.2271893,
+      "lng": -79.4288257
+    }
+  ],
+  "FACALA": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.7219998,
+      "lng": -79.1583807
+    }
+  ],
+  "LIMONCARRO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.3037166,
+      "lng": -79.4183427
+    }
+  ],
+  "MACABI": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.716899604256314,
+      "lng": -79.36905757878583
+    }
+  ],
+  "MACABI BAJO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.716899604256314,
+      "lng": -79.36905757878583
+    }
+  ],
+  "MANUEL AREVALO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.0672429,
+      "lng": -79.0630932
+    }
+  ],
+  "POMALCA": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -6.7656,
+      "lng": -79.7731
+    }
+  ],
+  "PORVENIR": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.08682061362065,
+      "lng": -79.00359985119874
+    }
+  ],
+  "TRUJILLO": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.1119306,
+      "lng": -79.0263645
+    }
+  ],
+  "VERDUN": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -7.34,
+      "lng": -79.465
+    }
+  ],
+  "VIRU": [
+    {
+      "nombre": "PLAZA DE ARMAS",
+      "lat": -8.4165648,
+      "lng": -78.7518716
+    }
+  ]
+}

@@ -1,7 +1,9 @@
 fastapi
+uvicorn[standard]
 pandas
 openpyxl
 python-multipart
+playwright
 psycopg2-binary
 python-dotenv
 requests
