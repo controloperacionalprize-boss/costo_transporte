@@ -1097,11 +1097,13 @@ def rebalanceo(req: RebalanceoRequest):
     recomendaciones.sort(key=lambda r: r["ocup"])
     total_reasignados = sum(len([a for a in r["asignaciones"] if a["BUS_DESTINO"] != "SIN ESPACIO"]) for r in recomendaciones)
     total_sin_espacio = sum(len([a for a in r["asignaciones"] if a["BUS_DESTINO"] == "SIN ESPACIO"]) for r in recomendaciones)
+    # Un bus es eliminable solo si TODAS sus personas se pudieron reasignar
+    buses_eliminables = [r for r in recomendaciones if all(a["BUS_DESTINO"] != "SIN ESPACIO" for a in r["asignaciones"]) and len(r["asignaciones"]) > 0]
 
     return {
         "recomendaciones": recomendaciones,
         "resumen": {
-            "buses_eliminables": len(recomendaciones),
+            "buses_eliminables": len(buses_eliminables),
             "personas_reasignables": total_reasignados,
             "sin_espacio": total_sin_espacio,
             "perdida_total": round(sum(r.get("perdida", 0) for r in recomendaciones), 2),
