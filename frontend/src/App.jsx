@@ -1338,14 +1338,18 @@ export default function App() {
                 <div className="rebal-summary">
                   <MetricCard title="Buses eliminables" value={rebalanceo.resumen.buses_eliminables} color="red" icon={<i className="fa-solid fa-ban" />} />
                   <MetricCard title="Personas reasignadas" value={rebalanceo.resumen.personas_reasignables} color="yellow" icon={<i className="fa-solid fa-people-arrows" />} />
-                  <MetricCard title="Sin espacio" value={rebalanceo.resumen.sin_espacio} color="red" icon={<i className="fa-solid fa-triangle-exclamation" />} />
+                  <MetricCard title="Reubicados" value={rebalanceo.resumen.sin_espacio} color="red" icon={<i className="fa-solid fa-triangle-exclamation" />} />
                   <MetricCard title="Pérdida total" value={`S/${(rebalanceo.recomendaciones?.reduce((sum, r) => sum + (r.perdida || 0), 0) || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`} color="red" icon={<i className="fa-solid fa-money-bill-wave" />} />
                 </div>
               )}
 
               {rutasData && <RouteMap rutasData={rutasData} onDistancesReady={setRouteDistances} />}
 
-              {rebalanceo?.recomendaciones?.map((rec, idx) => (
+              {rebalanceo?.recomendaciones?.map((rec, idx) => {
+                const asigs = rec.asignaciones || rec.personas_reasignables || [];
+                const jarrasValues = asigs.map(p => p.PROM_JARRAS_SEM ?? p.rendimiento ?? 0).filter(v => v > 0);
+                const promJarras = jarrasValues.length > 0 ? (jarrasValues.reduce((a, b) => a + b, 0) / jarrasValues.length).toFixed(1) : '0';
+                return (
                 <div key={idx} className={`rebal-card ${rebalOpen[idx] ? 'open' : ''}`}>
                   <div className="rebal-card-header" onClick={() => toggleRebal(idx)}>
                     <span className="rebal-placa">{rec.placa || rec.placa_origen || rec.bus}</span>
@@ -1355,6 +1359,7 @@ export default function App() {
                       &nbsp;|&nbsp; Tarifa: S/{rec.tarifa?.toLocaleString() ?? '?'}
                       &nbsp;|&nbsp; Costo/Pas: S/{rec.costo_pasajero?.toFixed(2) ?? '?'}
                       &nbsp;|&nbsp; <span style={{color:'var(--red)', fontWeight:700}}>Pérdida: S/{rec.perdida?.toLocaleString() ?? '?'}</span>
+                      &nbsp;|&nbsp; <span style={{color:'#059669', fontWeight:600}}>Prom. Jarras: {promJarras}</span>
                     </span>
                     <span className="rebal-occ" style={{ color: occColor(rec.ocupacion_pct ?? rec.ocup ?? 0) }}>
                       {rec.ocupacion_pct ?? rec.ocup ?? 0}%
@@ -1394,7 +1399,8 @@ export default function App() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </section>
           </>;
         })()}
