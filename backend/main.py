@@ -980,7 +980,7 @@ def rebalanceo(req: RebalanceoRequest):
     placas_viajes = viajes_placa["BUS"].unique().tolist() if viajes_placa is not None else []
     personas_viajes = personas[personas["PLACA"].isin(placas_viajes)]
 
-    buses_baja = cruce[cruce["% OCUP. REAL"] < umbral].copy()
+    buses_baja = cruce[cruce["% OCUP. REAL"].round(0) < umbral].copy()
     buses_con_espacio = cruce[cruce["ASIENTOS_VACIOS"] > 0].copy()
 
     if buses_baja.empty:
