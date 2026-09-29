@@ -1051,14 +1051,16 @@ export default function App() {
 
   const runRebalanceo = async () => {
     setRebalLoading(true);
+    const f = dbStatus?.fecha || '';
+    const emp = dbStatus?.empresa || '';
     try {
       const [res, rutas] = await Promise.all([
         api('/api/rebalanceo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: SESSION_ID, umbral }),
+          body: JSON.stringify({ session_id: SESSION_ID, umbral, fecha: f, empresa: emp }),
         }),
-        api(`/api/rutas-mapa?session_id=${SESSION_ID}`),
+        api(`/api/rutas-mapa?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(emp)}`),
       ]);
       setRebalanceo(res);
       setRutasData(rutas);
@@ -1379,8 +1381,8 @@ export default function App() {
                                   </td>
                                   <td style={{ fontFamily: 'var(--mono)' }}>{p.BUS_DESTINO || p.destino || '-'}</td>
                                   <td>{p.ZONA_DESTINO || '-'}</td>
-                                  <td style={{ fontSize: 11, color: p.TIPO_REASIGNACION === 'parada_en_ruta' ? '#b45309' : '#166534' }}>
-                                    {p.TIPO_REASIGNACION === 'parada_en_ruta' ? 'Parada en ruta' : p.TIPO_REASIGNACION === 'misma_zona' ? 'Misma zona' : '-'}
+                                  <td style={{ fontSize: 11, color: p.TIPO_REASIGNACION === 'parada_en_ruta' ? '#b45309' : p.TIPO_REASIGNACION === 'mismo_origen' ? '#1d4ed8' : '#166534' }}>
+                                    {p.TIPO_REASIGNACION === 'misma_zona' ? 'Misma zona' : p.TIPO_REASIGNACION === 'mismo_origen' ? 'Mismo origen' : p.TIPO_REASIGNACION === 'parada_en_ruta' ? 'Parada en ruta' : '-'}
                                   </td>
                                   <td>{p.CECO_DESTINO || '-'}</td>
                                 </tr>

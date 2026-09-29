@@ -21,6 +21,8 @@ class ProcessRequest(BaseModel):
 class RebalanceoRequest(BaseModel):
     session_id: str
     umbral: int = 70
+    fecha: str = ""
+    empresa: str = ""
 
 app = FastAPI(title="Optimizacion Transporte Cosecha")
 
@@ -199,20 +201,21 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # DATABASE (PostgreSQL) endpoints
 # ---------------------------------------------------------------------------
 
-def _ensure_session_data(sess: dict):
+def _ensure_session_data(sess: dict, fecha: str = "", empresa: str = ""):
     """Re-load and process data from DB if session is empty (Vercel serverless fix)."""
     if sess.get("cruce") is not None and sess.get("personas_enriched") is not None:
         return
     conn = _get_db_conn()
-    cur = conn.cursor()
-    cur.execute('SELECT MAX("FECHA") FROM rpt_controlbus_asistencia')
-    row = cur.fetchone()
-    if not row or not row[0]:
-        conn.close()
-        return
-    fecha = str(row[0])
+    if not fecha:
+        cur = conn.cursor()
+        cur.execute('SELECT MAX("FECHA") FROM rpt_controlbus_asistencia')
+        row = cur.fetchone()
+        if not row or not row[0]:
+            conn.close()
+            return
+        fecha = str(row[0])
 
-    _load_db_data_sync(sess, conn, fecha, "", "", "")
+    _load_db_data_sync(sess, conn, fecha, "", "", empresa)
     conn.close()
 
     if sess.get("viajes_placa") is not None and sess.get("personas") is not None:
@@ -221,6 +224,8 @@ def _ensure_session_data(sess: dict):
 
 def _load_db_data_sync(sess, conn, fecha, fecha_desde, fecha_hasta, empresa):
     """Synchronous DB load for serverless (no threading)."""
+    sess["_fecha"] = fecha
+    sess["_empresa"] = empresa
     cur = conn.cursor()
 
     def _find_col(cols, *keywords):
@@ -388,6 +393,8 @@ logger = logging.getLogger("cosecha")
 def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha_hasta: str = "", empresa: str = ""):
     logger.info(f"=== DB LOAD START === session={session_id} fecha={fecha} fecha_desde={fecha_desde} fecha_hasta={fecha_hasta} empresa={empresa}")
     sess = get_session(session_id)
+    sess["_fecha"] = fecha
+    sess["_empresa"] = empresa
     sess["db_progress"] = {"step": "Conectando a base de datos...", "pct": 0, "done": False, "errors": []}
 
     from datetime import datetime
@@ -672,6 +679,8 @@ def db_status(session_id: str = Query("default")):
         "asistencia_count": len(sess["personas"]) if "personas" in sess else 0,
         "viajes_loaded": "viajes_placa" in sess and sess.get("viajes_from_db"),
         "viajes_count": len(sess["viajes_placa"]) if "viajes_placa" in sess else 0,
+        "fecha": sess.get("_fecha", ""),
+        "empresa": sess.get("_empresa", ""),
     }
 
 
@@ -719,7 +728,7 @@ def process(req: ProcessRequest):
     viajes_placa = sess.get("viajes_placa")
     personas = sess.get("personas")
     if viajes_placa is None or personas is None:
-        _ensure_session_data(sess)
+        _ensure_session_data(sess, fecha=req.fecha if hasattr(req, 'fecha') else "", empresa=req.empresa if hasattr(req, 'empresa') else "")
         viajes_placa = sess.get("viajes_placa")
         personas = sess.get("personas")
     if viajes_placa is None or personas is None:
@@ -958,7 +967,7 @@ def _build_route_proximity(cruce, max_desvio_km=15):
 def rebalanceo(req: RebalanceoRequest):
     sess = get_session(req.session_id)
     umbral = req.umbral
-    _ensure_session_data(sess)
+    _ensure_session_data(sess, fecha=req.fecha, empresa=req.empresa)
     cruce = sess.get("cruce")
     personas = sess.get("personas_enriched")
     if cruce is None or personas is None:
@@ -1004,30 +1013,27 @@ def rebalanceo(req: RebalanceoRequest):
 
         cap_baja = bus_b["CAPACIDAD"]
 
-        # Solo recomendar hacia buses de igual o mayor capacidad
-        candidatos = buses_con_espacio[buses_con_espacio["CAPACIDAD"] >= cap_baja]
+        # Candidatos: buses distintos con espacio, SIN filtro de capacidad mínima
+        candidatos = buses_con_espacio[
+            (buses_con_espacio["BUS"] != placa_baja)
+            & (buses_con_espacio["ASIENTOS_VACIOS"] > 0)
+        ].copy()
 
-        # Primero: buses con el mismo origen de ruta (prioridad)
-        mismo_origen_filter = (
-            (candidatos["BUS"] != placa_baja)
-            & (candidatos["ASIENTOS_VACIOS"] > 0)
-            & (candidatos["_ORIGEN_RUTA"] == origen_baja)
-        )
-        # Segundo: buses cuya ruta pasa por el origen del bus eliminado (max 2km desvío)
+        # Prioridad 1: misma zona de procedencia
+        misma_zona_filter = candidatos["ZONA_PROCEDENCIA"].astype(str).str.upper().str.strip() == str(zona_baja).upper().strip()
+        # Prioridad 2: mismo origen de ruta
+        mismo_origen_filter = (~misma_zona_filter) & (candidatos["_ORIGEN_RUTA"] == origen_baja)
+        # Prioridad 3: ruta pasa cerca del origen (parada en ruta)
         def _ruta_pasa_por_zona(bus_placa):
             nearby = bus_zones_nearby.get(bus_placa, set())
             return origen_baja in nearby
 
-        ruta_cercana_filter = (
-            (candidatos["BUS"] != placa_baja)
-            & (candidatos["ASIENTOS_VACIOS"] > 0)
-            & (candidatos["_ORIGEN_RUTA"] != origen_baja)
-            & (candidatos["BUS"].apply(_ruta_pasa_por_zona))
-        )
+        ruta_cercana_filter = (~misma_zona_filter) & (~mismo_origen_filter) & (candidatos["BUS"].apply(_ruta_pasa_por_zona))
 
-        destinos_mismo_origen = candidatos[mismo_origen_filter].sort_values("TARIFA").copy()
-        destinos_ruta_cercana = candidatos[ruta_cercana_filter].sort_values("TARIFA").copy()
-        destinos = pd.concat([destinos_mismo_origen, destinos_ruta_cercana], ignore_index=True)
+        destinos_misma_zona = candidatos[misma_zona_filter].sort_values("ASIENTOS_VACIOS", ascending=False).copy()
+        destinos_mismo_origen = candidatos[mismo_origen_filter].sort_values("ASIENTOS_VACIOS", ascending=False).copy()
+        destinos_ruta_cercana = candidatos[ruta_cercana_filter].sort_values("ASIENTOS_VACIOS", ascending=False).copy()
+        destinos = pd.concat([destinos_misma_zona, destinos_mismo_origen, destinos_ruta_cercana], ignore_index=True)
 
         asignaciones = []
         espacio_restante = destinos.set_index("BUS")["ASIENTOS_VACIOS"].to_dict()
@@ -1044,8 +1050,9 @@ def rebalanceo(req: RebalanceoRequest):
                         ceco_dest = dest_rows["CECO"].values[0]
                         zona_dest = str(dest_rows["ZONA_PROCEDENCIA"].values[0]) if "ZONA_PROCEDENCIA" in dest_rows.columns else ""
                         if zona_dest in ("None", "nan", "NaN", ""): zona_dest = ""
+                    misma_zona_placas = set(destinos_misma_zona["BUS"].tolist())
                     mismo_origen_placas = set(destinos_mismo_origen["BUS"].tolist())
-                    tipo = "mismo_origen" if dest_placa in mismo_origen_placas else "parada_en_ruta"
+                    tipo = "misma_zona" if dest_placa in misma_zona_placas else "mismo_origen" if dest_placa in mismo_origen_placas else "parada_en_ruta"
                     asignaciones.append({
                         "DNI": str(_safe(persona["DNI PASA."])),
                         "PASAJERO": str(_safe(persona["PASAJERO"])),
@@ -1157,9 +1164,9 @@ DESTINOS_PLANTA = {
 }
 
 @app.get("/api/rutas-mapa")
-def rutas_mapa(session_id: str = Query("default")):
+def rutas_mapa(session_id: str = Query("default"), fecha: str = Query(""), empresa: str = Query("")):
     sess = get_session(session_id)
-    _ensure_session_data(sess)
+    _ensure_session_data(sess, fecha=fecha, empresa=empresa)
     cruce = sess.get("cruce")
     viajes_placa = sess.get("viajes_placa")
     if cruce is None or viajes_placa is None:
