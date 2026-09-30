@@ -5,6 +5,7 @@ import 'ag-grid-community/styles/ag-theme-alpine.css';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, CircleMarker, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Line, Legend, AreaChart, Area, ComposedChart } from 'recharts';
 
 const SESSION_ID = crypto.randomUUID();
 
@@ -66,6 +67,7 @@ const ZONA_A_SECTOR = {
   'CIUDAD DE DIOS': 'NORTE', 'GUADALUPE': 'NORTE', 'PACANGUILLA': 'NORTE', 'PACASMAYO': 'NORTE', 'VERDÚN': 'NORTE', 'VERDUN': 'NORTE',
   'JEQUETEPEQUE': 'NORTE', 'CHEQUÉN': 'NORTE', 'CHEQUEN': 'NORTE', 'SEMAN': 'NORTE',
   'TRUJILLO': 'SUR', 'ALTO TRUJILLO': 'SUR', 'LA ESPERANZA': 'SUR', 'LAREDO': 'SUR', 'PORVENIR': 'SUR',
+  'MANUEL AREVALO': 'SUR', 'ALTO MOCHE': 'SUR', 'EL MILAGRO': 'SUR',
   'CHICLAYO': 'NORTE II', 'POMALCA': 'NORTE II', 'JOSE LEONARDO ORTIZ': 'NORTE II', 'CALETA SANTA ROSA': 'NORTE II', 'CALETA SAN JOSE': 'NORTE II',
 };
 
@@ -111,7 +113,9 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
 
   const [fecha, setFecha] = useState('');
   const [empresaLocal, setEmpresaLocal] = useState('');
+  const [denomLocal, setDenomLocal] = useState('');
   const [empresas, setEmpresas] = useState([]);
+  const [denominaciones, setDenominaciones] = useState([]);
   const [fechasDisp, setFechasDisp] = useState([]);
 
   const autoLoaded = useRef(false);
@@ -122,25 +126,21 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
       setFechasDisp(d.fechas || []);
       if (d.fechas?.length) setFecha(d.fechas[0]);
       return d;
-    }).then(d => {
-      if (!autoLoaded.current && d.fechas?.length) {
-        autoLoaded.current = true;
-        const f = d.fechas[0];
-        setTimeout(() => loadFromDB({ fecha: f, empresa: '' }), 100);
-      }
     }).catch(() => {});
+    api('/api/db/denominaciones').then(d => setDenominaciones(d.denominaciones || [])).catch(() => {});
   }, []);
 
   const loadFromDB = async (overrides = {}) => {
     const f = overrides.fecha ?? fecha;
     const emp = overrides.empresa ?? empresaLocal;
+    const den = overrides.denominacion ?? denomLocal;
     setDbLoading(true);
     setDbProgress({ step: 'Conectando...', pct: 0 });
     try {
       await api('/api/db/load', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: SESSION_ID, fecha: f, empresa: emp }),
+        body: JSON.stringify({ session_id: SESSION_ID, fecha: f, empresa: emp, denominacion: den }),
       });
       const poll = setInterval(async () => {
         try {
@@ -181,6 +181,9 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
         <button className={`sidebar-nav-item ${activeTab === 'transporte' ? 'active' : ''}`} onClick={() => setActiveTab('transporte')}>
           <span className="nav-icon"><i className="fa-solid fa-truck" /></span> Transporte
         </button>
+        <button className={`sidebar-nav-item ${activeTab === 'indicadores' ? 'active' : ''}`} onClick={() => setActiveTab('indicadores')}>
+          <span className="nav-icon"><i className="fa-solid fa-chart-line" /></span> Indicadores
+        </button>
       </nav>
 
       <div className="sidebar-section">
@@ -207,9 +210,18 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
           <div style={{ fontSize: 11, color: 'var(--sidebar-text-dim)', marginBottom: 10 }}>Cargando fechas...</div>
         )}
         <label>Empresa</label>
-        <select value={empresaLocal} onChange={e => setEmpresaLocal(e.target.value)} style={{ width: '100%', marginBottom: 12 }}>
+        <select value={empresaLocal} onChange={e => {
+          setEmpresaLocal(e.target.value);
+          setDenomLocal('');
+          api(`/api/db/denominaciones?empresa=${encodeURIComponent(e.target.value)}`).then(d => setDenominaciones(d.denominaciones || [])).catch(() => {});
+        }} style={{ width: '100%', marginBottom: 12 }}>
           <option value="">Todas</option>
           {empresas.map(e => <option key={e} value={e}>{e}</option>)}
+        </select>
+        <label>Denominación CECO</label>
+        <select value={denomLocal} onChange={e => setDenomLocal(e.target.value)} style={{ width: '100%', marginBottom: 12 }}>
+          <option value="">Todas</option>
+          {denominaciones.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
         <button onClick={() => loadFromDB()} disabled={dbLoading} className="btn-buscar">
           {dbLoading ? <><span className="spinner" /> Cargando...</> : 'Buscar'}
@@ -833,6 +845,32 @@ export default function App() {
 
   const [expandedSector, setExpandedSector] = useState(null);
 
+  const [indicadorMes, setIndicadorMes] = useState('');
+  const [indicadorData, setIndicadorData] = useState(null);
+  const [indicadorLoading, setIndicadorLoading] = useState(false);
+  const [mesesDisponibles, setMesesDisponibles] = useState([]);
+
+  const loadIndicadores = async (mes = '') => {
+    setIndicadorLoading(true);
+    try {
+      const emp = dbStatus?.empresa || '';
+      const den = dbStatus?.denominacion || '';
+      const params = new URLSearchParams();
+      if (mes) params.set('mes', mes);
+      if (emp) params.set('empresa', emp);
+      if (den) params.set('denominacion', den);
+      const data = await api(`/api/indicadores/mensual?${params}`);
+      setIndicadorData(data);
+      setMesesDisponibles(data.meses_disponibles || []);
+      if (!mes && data.mes) setIndicadorMes(data.mes);
+    } catch (e) { console.error('Error indicadores:', e); }
+    setIndicadorLoading(false);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'indicadores' && !indicadorData) loadIndicadores(indicadorMes);
+  }, [activeTab]);
+
   const [facilito, setFacilito] = useState([]);
   const [facilitoLoading, setFacilitoLoading] = useState(false);
   const [facilitoProgress, setFacilitoProgress] = useState(null);
@@ -1053,14 +1091,15 @@ export default function App() {
     setRebalLoading(true);
     const f = dbStatus?.fecha || '';
     const emp = dbStatus?.empresa || '';
+    const den = dbStatus?.denominacion || '';
     try {
       const [res, rutas] = await Promise.all([
         api('/api/rebalanceo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: SESSION_ID, umbral, fecha: f, empresa: emp }),
+          body: JSON.stringify({ session_id: SESSION_ID, umbral, fecha: f, empresa: emp, denominacion: den }),
         }),
-        api(`/api/rutas-mapa?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(emp)}`),
+        api(`/api/rutas-mapa?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(emp)}&denominacion=${encodeURIComponent(den)}`),
       ]);
       setRebalanceo(res);
       setRutasData(rutas);
@@ -1096,16 +1135,6 @@ export default function App() {
           </div>
         </header>
 
-        {!(viajesFromDb && asistFromDb) && (
-          <section className="upload-section">
-            {!viajesFromDb && (
-              <Dropzone icon={<i className="fa-solid fa-file-excel" />} label="Viajes Realizados" hint="Puedes subir 1 o 2 archivos (.xlsx)" multiple onFiles={uploadViajes} fileNames={viajesFiles.map(f => f.name)} />
-            )}
-            {!asistFromDb && (
-              <Dropzone icon={<i className="fa-solid fa-users" />} label="Registro Asistencia" hint="Un archivo (.xlsx)" multiple={false} onFiles={uploadAsistencia} fileNames={asistenciaFile ? [asistenciaFile.name] : []} />
-            )}
-          </section>
-        )}
 
         {!cruce.length && !processing && (
           <div className="empty-state">
@@ -1404,6 +1433,165 @@ export default function App() {
             </section>
           </>;
         })()}
+
+        {activeTab === 'indicadores' && (
+          <section style={{ padding: '0 8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+              <h2 style={{ margin: 0 }}><i className="fa-solid fa-chart-line" style={{ marginRight: 8 }} />Indicadores Mensuales</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <select value={indicadorMes} onChange={e => { setIndicadorMes(e.target.value); loadIndicadores(e.target.value); }} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>
+                  {mesesDisponibles.length > 0 ? mesesDisponibles.map(m => {
+                    const [y, mo] = m.split('-');
+                    const label = new Date(y, parseInt(mo) - 1).toLocaleDateString('es-PE', { month: 'long', year: 'numeric' });
+                    return <option key={m} value={m}>{label.charAt(0).toUpperCase() + label.slice(1)}</option>;
+                  }) : <option value="">Cargando...</option>}
+                </select>
+                <button onClick={() => loadIndicadores(indicadorMes)} disabled={indicadorLoading} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  {indicadorLoading ? <><span className="spinner" style={{ marginRight: 6 }} />Cargando...</> : <><i className="fa-solid fa-rotate-right" style={{ marginRight: 4 }} />Actualizar</>}
+                </button>
+              </div>
+            </div>
+
+            {indicadorLoading && !indicadorData && (
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}><span className="spinner" style={{ marginRight: 8 }} />Cargando indicadores del mes...</div>
+            )}
+
+            {indicadorData?.totales && (() => {
+              const t = indicadorData.totales;
+              const dias = indicadorData.dias || [];
+              const ahorro = t.tarifa - t.gasto_optimo;
+              const pctAhorro = t.tarifa > 0 ? (ahorro / t.tarifa * 100) : 0;
+
+              const chartData = dias.map(d => {
+                const dt = new Date(d.fecha + 'T12:00:00');
+                return { ...d, dia: dt.getDate(), label: dt.toLocaleDateString('es-PE', { day: 'numeric', month: 'short' }) };
+              });
+
+              const vaciosProm = t.vacios_prom_bus || 0;
+
+              const customTooltip = ({ active, payload, label }) => {
+                if (!active || !payload?.length) return null;
+                return (
+                  <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#e2e8f0', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>{payload[0]?.payload?.label || label}</div>
+                    {payload.map((p, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 2 }}>
+                        <span style={{ color: p.color }}>{p.name}</span>
+                        <span style={{ fontWeight: 600 }}>S/{formatNum(Math.round(p.value))}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              };
+
+              const ocupTooltip = ({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0]?.payload;
+                return (
+                  <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#e2e8f0', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>{d?.label}</div>
+                    <div>Ocupación: <strong>{d?.ocupacion}%</strong></div>
+                    <div>Buses: <strong>{d?.buses}</strong></div>
+                    <div>Pasajeros: <strong>{formatNum(d?.pasajeros)}</strong></div>
+                  </div>
+                );
+              };
+
+              return <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 24 }}>
+                  <div style={{ padding: '20px 24px', borderRadius: 12, background: 'var(--bg-card)', border: '1.5px solid #ef444430', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', top: 0, left: 0, width: 4, height: '100%', background: '#ef4444' }} />
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Gasto sin optimizar</div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)' }}>S/{formatNum(Math.round(t.gasto_sin_opt))}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>Tarifa + pérdida por vacíos — {t.dias_operados} días</div>
+                  </div>
+                  <div style={{ padding: '20px 24px', borderRadius: 12, background: 'var(--bg-card)', border: '1.5px solid #3b82f630', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', top: 0, left: 0, width: 4, height: '100%', background: '#3b82f6' }} />
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Gasto actual</div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)' }}>S/{formatNum(Math.round(t.tarifa))}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>~{t.buses_prom} buses/día — {t.ocupacion_prom}% ocup. promedio</div>
+                  </div>
+                  <div style={{ padding: '20px 24px', borderRadius: 12, background: 'var(--bg-card)', border: '1.5px solid #16a34a30', position: 'relative', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', top: 0, left: 0, width: 4, height: '100%', background: '#16a34a' }} />
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#16a34a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>Gasto óptimo</div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text)' }}>S/{formatNum(Math.round(t.gasto_optimo))}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>Si todos los buses operaran a capacidad</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 28 }}>
+                  <div style={{ padding: '16px 20px', borderRadius: 10, background: 'var(--bg-card)', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4 }}>Ahorro potencial</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: '#16a34a' }}>S/{formatNum(Math.round(ahorro))}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>{pctAhorro.toFixed(1)}% del gasto actual</div>
+                  </div>
+                  <div style={{ padding: '16px 20px', borderRadius: 10, background: 'var(--bg-card)', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4 }}>Pérdida mensual</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>S/{formatNum(Math.round(t.perdida))}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>Asientos vacíos acumulados</div>
+                  </div>
+                  <div style={{ padding: '16px 20px', borderRadius: 10, background: 'var(--bg-card)', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4 }}>Días operados</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: '#3b82f6' }}>{t.dias_operados}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>~{t.buses_prom} buses promedio/día</div>
+                  </div>
+                  <div style={{ padding: '16px 20px', borderRadius: 10, background: 'var(--bg-card)', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4 }}>% Vacíos prom. por bus</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{vaciosProm}%</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>Promedio normalizado por capacidad</div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: 20, marginBottom: 28 }}>
+                  <div style={{ background: 'var(--bg-card)', borderRadius: 12, padding: '20px 16px', border: '1px solid var(--border)' }}>
+                    <h3 style={{ margin: '0 0 16px 8px', fontSize: 14 }}><i className="fa-solid fa-chart-column" style={{ marginRight: 6, color: '#3b82f6' }} />Gasto diario vs Pérdida</h3>
+                    <ResponsiveContainer width="100%" height={280}>
+                      <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
+                        <XAxis dataKey="dia" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+                        <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={v => `${(v/1000).toFixed(0)}k`} />
+                        <RTooltip content={customTooltip} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        <Bar dataKey="tarifa" name="Gasto" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={16} />
+                        <Bar dataKey="perdida" name="Pérdida" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={16} opacity={0.8} />
+                        <Line dataKey="gasto_optimo" name="Óptimo" stroke="#16a34a" strokeWidth={2} dot={false} strokeDasharray="5 5" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div style={{ background: 'var(--bg-card)', borderRadius: 12, padding: '20px 16px', border: '1px solid var(--border)' }}>
+                    <h3 style={{ margin: '0 0 16px 8px', fontSize: 14 }}><i className="fa-solid fa-chart-area" style={{ marginRight: 6, color: '#8b5cf6' }} />Ocupación diaria (%)</h3>
+                    <ResponsiveContainer width="100%" height={280}>
+                      <AreaChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                        <defs>
+                          <linearGradient id="gradOcup" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
+                            <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
+                        <XAxis dataKey="dia" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+                        <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={v => `${v}%`} />
+                        <RTooltip content={ocupTooltip} />
+                        <Area dataKey="ocupacion" name="Ocupación" stroke="#8b5cf6" strokeWidth={2.5} fill="url(#gradOcup)" dot={{ r: 3, fill: '#8b5cf6', strokeWidth: 0 }} activeDot={{ r: 5, fill: '#8b5cf6' }} />
+                        <Line dataKey={() => 80} name="Meta 80%" stroke="#16a34a" strokeWidth={1} strokeDasharray="4 4" dot={false} legendType="none" />
+                        <Line dataKey={() => 50} name="Mínimo 50%" stroke="#ef4444" strokeWidth={1} strokeDasharray="4 4" dot={false} legendType="none" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+              </>;
+            })()}
+
+            {indicadorData && !indicadorData.totales && !indicadorLoading && (
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>
+                <i className="fa-solid fa-calendar-xmark" style={{ fontSize: 36, marginBottom: 12 }} />
+                <p>No hay datos para este mes</p>
+              </div>
+            )}
+          </section>
+        )}
 
         {activeTab === 'transporte' && (
           <>

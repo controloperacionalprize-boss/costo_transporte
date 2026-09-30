@@ -23,6 +23,7 @@ class RebalanceoRequest(BaseModel):
     umbral: int = 70
     fecha: str = ""
     empresa: str = ""
+    denominacion: str = ""
 
 app = FastAPI(title="Optimizacion Transporte Cosecha")
 
@@ -124,10 +125,12 @@ def procesar_viajes(file_bytes: bytes) -> pd.DataFrame:
     df = pd.read_excel(io.BytesIO(file_bytes), sheet_name="DATA", header=skip)
     df.columns = df.columns.str.strip()
     df["NRO. PAS. IDA"] = pd.to_numeric(df["NRO. PAS. IDA"], errors="coerce").fillna(0).astype(int)
-    df_ida = df[
-        (df["NRO. PAS. IDA"] != 0)
-        & (df["CECO"].astype(str).str.contains("COSECHA", case=False, na=False))
-    ].copy()
+    pas_filter = df["NRO. PAS. IDA"] != 0
+    if "DENOMINACION CECO" in df.columns:
+        ceco_filter = df["DENOMINACION CECO"].astype(str).str.strip().str.upper() == "OPERACIONES Y COSECHA"
+    else:
+        ceco_filter = df["CECO"].astype(str).str.contains("COSECHA", case=False, na=False)
+    df_ida = df[pas_filter & ceco_filter].copy()
     df_ida["BUS"] = df_ida["BUS"].astype(str).str.strip().str.upper()
     df_ida["CAPACIDAD"] = pd.to_numeric(df_ida["CAPACIDAD"], errors="coerce").fillna(0).astype(int)
     df_ida["RUTA"] = df_ida["RUTA"].astype(str).str.strip().apply(_normalizar_ruta)
@@ -201,7 +204,9 @@ def _df_to_records(df: pd.DataFrame) -> list:
 # DATABASE (PostgreSQL) endpoints
 # ---------------------------------------------------------------------------
 
-def _ensure_session_data(sess: dict, fecha: str = "", empresa: str = ""):
+def _ensure_session_data(sess: dict, fecha: str = "", empresa: str = "", denominacion: str = ""):
+    if denominacion:
+        sess["_denominacion"] = denominacion
     """Re-load and process data from DB if session is empty (Vercel serverless fix)."""
     if sess.get("cruce") is not None and sess.get("personas_enriched") is not None:
         return
@@ -297,9 +302,15 @@ def _load_db_data_sync(sess, conn, fecha, fecha_desde, fecha_hasta, empresa):
 
     # Viajes
     viajes_emp_where = f""" AND "EMPRESA" = '{empresa}'""" if empresa else ""
-    df_viajes_raw = pd.read_sql(f"""SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR" FROM (SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR" FROM rpt_controlbus_viajes_aq1 UNION ALL SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR" FROM rpt_controlbus_viajes_aq2) v WHERE {fecha_where}{viajes_emp_where}""", conn)
+    df_viajes_raw = pd.read_sql(f"""SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR","DENOMINACION CECO" FROM (SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR","DENOMINACION CECO" FROM rpt_controlbus_viajes_aq1 UNION ALL SELECT "BUS","CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA","ZONA PROCEDENCIA","CECO","T.BUS","RUTA","TARIFA","FECHA","EMPRESA","PROVEEDOR","DENOMINACION CECO" FROM rpt_controlbus_viajes_aq2) v WHERE {fecha_where}{viajes_emp_where}""", conn)
     df_viajes_raw["NRO. PAS. IDA"] = pd.to_numeric(df_viajes_raw["NRO. PAS. IDA"], errors="coerce").fillna(0).astype(int)
-    df_viajes_raw = df_viajes_raw[(df_viajes_raw["NRO. PAS. IDA"] != 0) & (df_viajes_raw["CECO"].astype(str).str.contains("COSECHA", case=False, na=False))].copy()
+    _pas = df_viajes_raw["NRO. PAS. IDA"] != 0
+    _denom = sess.get("_denominacion", "")
+    if _denom:
+        _dm = df_viajes_raw["DENOMINACION CECO"].astype(str).str.strip().str.upper() == _denom.strip().upper()
+    else:
+        _dm = pd.Series(True, index=df_viajes_raw.index)
+    df_viajes_raw = df_viajes_raw[_pas & _dm].copy()
     df_viajes_raw["BUS"] = df_viajes_raw["BUS"].astype(str).str.strip().str.upper()
     df_viajes_raw["CAPACIDAD"] = pd.to_numeric(df_viajes_raw["CAPACIDAD"], errors="coerce").fillna(0).astype(int)
     df_viajes_raw["RUTA"] = df_viajes_raw["RUTA"].fillna("").astype(str).str.strip().replace({"nan": "", "None": ""})
@@ -384,17 +395,19 @@ class DBLoadRequest(BaseModel):
     fecha_desde: str = ""
     fecha_hasta: str = ""
     empresa: str = ""
+    denominacion: str = ""
 
 
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cosecha")
 
-def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha_hasta: str = "", empresa: str = ""):
-    logger.info(f"=== DB LOAD START === session={session_id} fecha={fecha} fecha_desde={fecha_desde} fecha_hasta={fecha_hasta} empresa={empresa}")
+def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha_hasta: str = "", empresa: str = "", denominacion: str = ""):
+    logger.info(f"=== DB LOAD START === session={session_id} fecha={fecha} fecha_desde={fecha_desde} fecha_hasta={fecha_hasta} empresa={empresa} denominacion={denominacion}")
     sess = get_session(session_id)
     sess["_fecha"] = fecha
     sess["_empresa"] = empresa
+    sess["_denominacion"] = denominacion
     sess["db_progress"] = {"step": "Conectando a base de datos...", "pct": 0, "done": False, "errors": []}
 
     from datetime import datetime
@@ -550,12 +563,12 @@ def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha
         # Viajes (rpt_controlbus_viajes_aq1 + aq2) — misma fecha que asistencia
         viajes_emp_where = f""" AND "EMPRESA" = '{empresa}'""" if empresa else ""
         query_viajes = f"""
-            SELECT "BUS", "CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA", "ZONA PROCEDENCIA", "CECO", "T.BUS", "RUTA", "TARIFA", "FECHA", "EMPRESA", "PROVEEDOR"
+            SELECT "BUS", "CAPACIDAD","PORCENTAJE OCUP","NRO. PAS. IDA", "ZONA PROCEDENCIA", "CECO", "T.BUS", "RUTA", "TARIFA", "FECHA", "EMPRESA", "PROVEEDOR", "DENOMINACION CECO"
             FROM (
-                SELECT "BUS", "CAPACIDAD", "PORCENTAJE OCUP", "NRO. PAS. IDA", "ZONA PROCEDENCIA", "CECO", "T.BUS", "RUTA", "TARIFA", "FECHA", "EMPRESA", "PROVEEDOR"
+                SELECT "BUS", "CAPACIDAD", "PORCENTAJE OCUP", "NRO. PAS. IDA", "ZONA PROCEDENCIA", "CECO", "T.BUS", "RUTA", "TARIFA", "FECHA", "EMPRESA", "PROVEEDOR", "DENOMINACION CECO"
                 FROM rpt_controlbus_viajes_aq1
                 UNION ALL
-                SELECT "BUS", "CAPACIDAD", "PORCENTAJE OCUP", "NRO. PAS. IDA", "ZONA PROCEDENCIA", "CECO", "T.BUS", "RUTA", "TARIFA", "FECHA", "EMPRESA", "PROVEEDOR"
+                SELECT "BUS", "CAPACIDAD", "PORCENTAJE OCUP", "NRO. PAS. IDA", "ZONA PROCEDENCIA", "CECO", "T.BUS", "RUTA", "TARIFA", "FECHA", "EMPRESA", "PROVEEDOR", "DENOMINACION CECO"
                 FROM rpt_controlbus_viajes_aq2
             ) v
             WHERE {fecha_where}{viajes_emp_where}
@@ -578,11 +591,13 @@ def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha
         df_viajes_raw = pd.read_sql(query_viajes, conn)
         logger.info(f"Viajes raw: {len(df_viajes_raw)} rows, columns: {list(df_viajes_raw.columns)}")
         df_viajes_raw["NRO. PAS. IDA"] = pd.to_numeric(df_viajes_raw["NRO. PAS. IDA"], errors="coerce").fillna(0).astype(int)
-        df_viajes_raw = df_viajes_raw[
-            (df_viajes_raw["NRO. PAS. IDA"] != 0)
-            & (df_viajes_raw["CECO"].astype(str).str.contains("COSECHA", case=False, na=False))
-        ].copy()
-        logger.info(f"Viajes filtered (COSECHA + PAS>0): {len(df_viajes_raw)} rows")
+        pas_mask = df_viajes_raw["NRO. PAS. IDA"] != 0
+        if denominacion:
+            denom_mask = df_viajes_raw["DENOMINACION CECO"].astype(str).str.strip().str.upper() == denominacion.strip().upper()
+        else:
+            denom_mask = pd.Series(True, index=df_viajes_raw.index)
+        df_viajes_raw = df_viajes_raw[pas_mask & denom_mask].copy()
+        logger.info(f"Viajes filtered (denom={denominacion or 'ALL'} + PAS>0): {len(df_viajes_raw)} rows")
         df_viajes_raw["BUS"] = df_viajes_raw["BUS"].astype(str).str.strip().str.upper()
         df_viajes_raw["CAPACIDAD"] = pd.to_numeric(df_viajes_raw["CAPACIDAD"], errors="coerce").fillna(0).astype(int)
         df_viajes_raw["RUTA"] = df_viajes_raw["RUTA"].fillna("").astype(str).str.strip()
@@ -647,9 +662,33 @@ def db_filters():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/db/denominaciones")
+def db_denominaciones(empresa: str = Query("")):
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        conditions = [""""DENOMINACION CECO" IS NOT NULL""", """"DENOMINACION CECO" != ''"""]
+        if empresa:
+            conditions.append(f""""EMPRESA" = '{empresa}'""")
+        where = " AND ".join(conditions)
+        cur.execute(f"""
+            SELECT DISTINCT "DENOMINACION CECO" FROM (
+                SELECT "DENOMINACION CECO", "EMPRESA" FROM rpt_controlbus_viajes_aq1
+                UNION
+                SELECT "DENOMINACION CECO", "EMPRESA" FROM rpt_controlbus_viajes_aq2
+            ) v WHERE {where}
+            ORDER BY "DENOMINACION CECO"
+        """)
+        denominaciones = [r[0].strip() for r in cur.fetchall() if r[0] and r[0].strip()]
+        conn.close()
+        return {"denominaciones": denominaciones}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/db/load")
 def db_load(req: DBLoadRequest):
-    t = threading.Thread(target=_load_db_data, args=(req.session_id, req.fecha, req.fecha_desde, req.fecha_hasta, req.empresa), daemon=True)
+    t = threading.Thread(target=_load_db_data, args=(req.session_id, req.fecha, req.fecha_desde, req.fecha_hasta, req.empresa, req.denominacion), daemon=True)
     t.start()
     return {"status": "started"}
 
@@ -681,6 +720,7 @@ def db_status(session_id: str = Query("default")):
         "viajes_count": len(sess["viajes_placa"]) if "viajes_placa" in sess else 0,
         "fecha": sess.get("_fecha", ""),
         "empresa": sess.get("_empresa", ""),
+        "denominacion": sess.get("_denominacion", ""),
     }
 
 
@@ -728,7 +768,7 @@ def process(req: ProcessRequest):
     viajes_placa = sess.get("viajes_placa")
     personas = sess.get("personas")
     if viajes_placa is None or personas is None:
-        _ensure_session_data(sess, fecha=req.fecha if hasattr(req, 'fecha') else "", empresa=req.empresa if hasattr(req, 'empresa') else "")
+        _ensure_session_data(sess, fecha=req.fecha if hasattr(req, 'fecha') else "", empresa=req.empresa if hasattr(req, 'empresa') else "", denominacion=req.denominacion if hasattr(req, 'denominacion') else "")
         viajes_placa = sess.get("viajes_placa")
         personas = sess.get("personas")
     if viajes_placa is None or personas is None:
@@ -967,7 +1007,7 @@ def _build_route_proximity(cruce, max_desvio_km=15):
 def rebalanceo(req: RebalanceoRequest):
     sess = get_session(req.session_id)
     umbral = req.umbral
-    _ensure_session_data(sess, fecha=req.fecha, empresa=req.empresa)
+    _ensure_session_data(sess, fecha=req.fecha, empresa=req.empresa, denominacion=req.denominacion)
     cruce = sess.get("cruce")
     personas = sess.get("personas_enriched")
     if cruce is None or personas is None:
@@ -1163,9 +1203,9 @@ DESTINOS_PLANTA = {
 }
 
 @app.get("/api/rutas-mapa")
-def rutas_mapa(session_id: str = Query("default"), fecha: str = Query(""), empresa: str = Query("")):
+def rutas_mapa(session_id: str = Query("default"), fecha: str = Query(""), empresa: str = Query(""), denominacion: str = Query("")):
     sess = get_session(session_id)
-    _ensure_session_data(sess, fecha=fecha, empresa=empresa)
+    _ensure_session_data(sess, fecha=fecha, empresa=empresa, denominacion=denominacion)
     cruce = sess.get("cruce")
     viajes_placa = sess.get("viajes_placa")
     if cruce is None or viajes_placa is None:
@@ -1268,6 +1308,124 @@ def debug_rutas():
         df = pd.read_sql(query, conn)
         conn.close()
         return {"rutas": df["RUTA"].tolist(), "total": len(df)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Indicadores Mensuales ────────────────────────────────────────────────────
+
+@app.get("/api/indicadores/mensual")
+def indicadores_mensual(mes: str = Query(""), empresa: str = Query(""), denominacion: str = Query("")):
+    """Returns daily aggregated indicators for a given month (YYYY-MM)."""
+    try:
+        conn = _get_db_conn()
+        if not mes:
+            cur = conn.cursor()
+            cur.execute('SELECT MAX("FECHA") FROM rpt_controlbus_asistencia')
+            max_fecha = cur.fetchone()[0]
+            if max_fecha:
+                mes = str(max_fecha)[:7]
+            else:
+                conn.close()
+                return {"mes": "", "dias": [], "meses_disponibles": []}
+
+        import calendar
+        year, month = int(mes[:4]), int(mes[5:7])
+        last_day = calendar.monthrange(year, month)[1]
+        fecha_desde = f"{mes}-01"
+        fecha_hasta = f"{mes}-{last_day:02d}"
+
+        emp_where = f""" AND "EMPRESA" = '{empresa}'""" if empresa else ""
+
+        query = f"""
+            SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "FECHA", "ZONA PROCEDENCIA", "CECO", "DENOMINACION CECO", "EMPRESA"
+            FROM (
+                SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "FECHA", "ZONA PROCEDENCIA", "CECO", "DENOMINACION CECO", "EMPRESA"
+                FROM rpt_controlbus_viajes_aq1
+                UNION ALL
+                SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "FECHA", "ZONA PROCEDENCIA", "CECO", "DENOMINACION CECO", "EMPRESA"
+                FROM rpt_controlbus_viajes_aq2
+            ) v
+            WHERE "FECHA" BETWEEN '{fecha_desde}' AND '{fecha_hasta}'{emp_where}
+        """
+        df = pd.read_sql(query, conn)
+        df["NRO. PAS. IDA"] = pd.to_numeric(df["NRO. PAS. IDA"], errors="coerce").fillna(0).astype(int)
+        df["CAPACIDAD"] = pd.to_numeric(df["CAPACIDAD"], errors="coerce").fillna(0).astype(int)
+        df["TARIFA"] = pd.to_numeric(df["TARIFA"], errors="coerce").fillna(0)
+        _ind_pas = df["NRO. PAS. IDA"] != 0
+        if denominacion:
+            _ind_dm = df["DENOMINACION CECO"].astype(str).str.strip().str.upper() == denominacion.strip().upper()
+        else:
+            _ind_dm = pd.Series(True, index=df.index)
+        df = df[_ind_pas & _ind_dm].copy()
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT TO_CHAR("FECHA", 'YYYY-MM') as mes
+            FROM rpt_controlbus_viajes_aq1
+            WHERE "FECHA" >= CURRENT_DATE - INTERVAL '6 months'
+            UNION
+            SELECT DISTINCT TO_CHAR("FECHA", 'YYYY-MM') as mes
+            FROM rpt_controlbus_viajes_aq2
+            WHERE "FECHA" >= CURRENT_DATE - INTERVAL '6 months'
+            ORDER BY mes DESC
+        """)
+        meses_disponibles = [r[0] for r in cur.fetchall() if r[0]]
+        conn.close()
+
+        if df.empty:
+            return {"mes": mes, "dias": [], "totales": {}, "meses_disponibles": meses_disponibles}
+
+        dias = []
+        for fecha, grp in df.groupby("FECHA"):
+            by_bus = grp.groupby("BUS").agg(
+                CAPACIDAD=("CAPACIDAD", "first"),
+                PAS_REAL=("NRO. PAS. IDA", "sum"),
+                TARIFA=("TARIFA", "sum"),
+                ZONA=("ZONA PROCEDENCIA", "first"),
+            ).reset_index()
+            by_bus["ASIENTOS_VACIOS"] = (by_bus["CAPACIDAD"] - by_bus["PAS_REAL"]).clip(lower=0)
+            by_bus["PERDIDA"] = by_bus.apply(
+                lambda r: round((r["TARIFA"] / max(r["CAPACIDAD"], 1)) * r["ASIENTOS_VACIOS"], 2), axis=1
+            )
+            tarifa = float(by_bus["TARIFA"].sum())
+            perdida = float(by_bus["PERDIDA"].sum())
+            cap = int(by_bus["CAPACIDAD"].sum())
+            pas = int(by_bus["PAS_REAL"].sum())
+            buses = len(by_bus)
+            ocup = round(pas / max(cap, 1) * 100, 1)
+            optimo = tarifa - perdida
+
+            by_bus["PCT_VACIOS"] = (by_bus["ASIENTOS_VACIOS"] / by_bus["CAPACIDAD"].clip(lower=1) * 100)
+            vacios_prom = round(float(by_bus["PCT_VACIOS"].mean()), 1) if buses > 0 else 0
+
+            dias.append({
+                "fecha": fecha.isoformat() if hasattr(fecha, 'isoformat') else str(fecha),
+                "buses": buses,
+                "capacidad": cap,
+                "pasajeros": pas,
+                "tarifa": round(tarifa, 2),
+                "perdida": round(perdida, 2),
+                "gasto_sin_opt": round(tarifa + perdida, 2),
+                "gasto_optimo": round(optimo, 2),
+                "ocupacion": ocup,
+                "vacios_prom_bus": vacios_prom,
+            })
+
+        dias.sort(key=lambda d: d["fecha"])
+
+        totales = {
+            "buses_prom": round(sum(d["buses"] for d in dias) / max(len(dias), 1), 1),
+            "tarifa": round(sum(d["tarifa"] for d in dias), 2),
+            "perdida": round(sum(d["perdida"] for d in dias), 2),
+            "gasto_sin_opt": round(sum(d["gasto_sin_opt"] for d in dias), 2),
+            "gasto_optimo": round(sum(d["gasto_optimo"] for d in dias), 2),
+            "ocupacion_prom": round(sum(d["ocupacion"] for d in dias) / max(len(dias), 1), 1),
+            "vacios_prom_bus": round(sum(d["vacios_prom_bus"] for d in dias) / max(len(dias), 1), 1),
+            "dias_operados": len(dias),
+        }
+
+        return {"mes": mes, "dias": dias, "totales": totales, "meses_disponibles": meses_disponibles}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
