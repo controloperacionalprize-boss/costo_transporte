@@ -1526,11 +1526,6 @@ export default function App() {
                     <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>{pctAhorro.toFixed(1)}% del gasto actual</div>
                   </div>
                   <div style={{ padding: '16px 20px', borderRadius: 10, background: 'var(--bg-card)', textAlign: 'center' }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4 }}>Pérdida mensual</div>
-                    <div style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>S/{formatNum(Math.round(t.perdida))}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>Asientos vacíos acumulados</div>
-                  </div>
-                  <div style={{ padding: '16px 20px', borderRadius: 10, background: 'var(--bg-card)', textAlign: 'center' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4 }}>Días operados</div>
                     <div style={{ fontSize: 24, fontWeight: 800, color: '#3b82f6' }}>{t.dias_operados}</div>
                     <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>~{t.buses_prom} buses promedio/día</div>
@@ -1553,8 +1548,8 @@ export default function App() {
                         <RTooltip content={customTooltip} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
                         <Bar dataKey="tarifa" name="Gasto" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={16} />
-                        <Bar dataKey="perdida" name="Pérdida" fill="#ef4444" radius={[4, 4, 0, 0]} barSize={16} opacity={0.8} />
-                        <Line dataKey="gasto_optimo" name="Óptimo" stroke="#16a34a" strokeWidth={2} dot={false} strokeDasharray="5 5" />
+                        <Bar dataKey="gasto_optimo" name="Gasto Óptimo" fill="#16a34a" radius={[4, 4, 0, 0]} barSize={16} opacity={0.8} />
+                        <Line dataKey="perdida" name="Ahorro" stroke="#ef4444" strokeWidth={2} dot={{ r: 3, fill: '#ef4444', strokeWidth: 0 }} />
                       </ComposedChart>
                     </ResponsiveContainer>
                   </div>
@@ -1574,8 +1569,7 @@ export default function App() {
                         <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#94a3b8' }} tickFormatter={v => `${v}%`} />
                         <RTooltip content={ocupTooltip} />
                         <Area dataKey="ocupacion" name="Ocupación" stroke="#8b5cf6" strokeWidth={2.5} fill="url(#gradOcup)" dot={{ r: 3, fill: '#8b5cf6', strokeWidth: 0 }} activeDot={{ r: 5, fill: '#8b5cf6' }} />
-                        <Line dataKey={() => 80} name="Meta 80%" stroke="#16a34a" strokeWidth={1} strokeDasharray="4 4" dot={false} legendType="none" />
-                        <Line dataKey={() => 50} name="Mínimo 50%" stroke="#ef4444" strokeWidth={1} strokeDasharray="4 4" dot={false} legendType="none" />
+                        <Line dataKey={() => 90} name="Meta 90%" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 4" dot={false} legendType="none" />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
