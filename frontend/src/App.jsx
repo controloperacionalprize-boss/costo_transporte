@@ -223,9 +223,6 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
         <button className={`sidebar-nav-item ${activeTab === 'indicadores' ? 'active' : ''}`} onClick={() => setActiveTab('indicadores')}>
           <span className="nav-icon"><i className="fa-solid fa-chart-line" /></span> Indicadores
         </button>
-        <button className={`sidebar-nav-item ${activeTab === 'comparativa' ? 'active' : ''}`} onClick={() => setActiveTab('comparativa')}>
-          <span className="nav-icon"><i className="fa-solid fa-arrows-left-right" /></span> Comparativa
-        </button>
         <button className={`sidebar-nav-item ${activeTab === 'bajas' ? 'active' : ''}`} onClick={() => setActiveTab('bajas')}>
           <span className="nav-icon"><i className="fa-solid fa-user-minus" /></span> Bajas {bajasCount > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, marginLeft: 6 }}>{bajasCount}</span>}
         </button>
@@ -910,6 +907,14 @@ export default function App() {
   const [compEjec, setCompEjec] = useState(null);
   const [compEjecLoading, setCompEjecLoading] = useState(false);
 
+  const [kilosExport, setKilosExport] = useState(null);
+  const [tipoCambio, setTipoCambio] = useState(3.75);
+
+  const [intercambios, setIntercambios] = useState([]);
+  const [showIntercambioModal, setShowIntercambioModal] = useState(false);
+  const [intercambioPlacaOriginal, setIntercambioPlacaOriginal] = useState('');
+  const [intercambioPlacaNueva, setIntercambioPlacaNueva] = useState('');
+
   const loadCompEjec = async () => {
     if (!dbStatus?.fecha) return;
     setCompEjecLoading(true);
@@ -927,6 +932,15 @@ export default function App() {
       setCompEjec(res);
     } catch (e) { alert('Error: ' + e.message); }
     setCompEjecLoading(false);
+  };
+
+  const loadKilosExport = async (fechaOverride) => {
+    const f = fechaOverride || dbStatus?.fecha;
+    if (!f) return;
+    try {
+      const res = await api(`/api/kilos-exportacion?fecha=${encodeURIComponent(f)}&session_id=${SESSION_ID}`);
+      setKilosExport(res);
+    } catch (e) { console.error('kilos-export error', e); }
   };
 
   const loadComparativa = async (fecha = '') => {
@@ -1100,6 +1114,7 @@ export default function App() {
     setProcessing(false);
     // Cargar unificaciones guardadas para esta fecha
     setTimeout(() => loadUnificaciones(fechaParam), 100);
+    setTimeout(() => loadKilosExport(fechaParam), 200);
   };
 
   const filteredCruce = useMemo(() => {
@@ -1336,6 +1351,40 @@ export default function App() {
     } catch (e) { alert('Error: ' + e.message); }
   };
 
+  const guardarIntercambio = async () => {
+    if (!intercambioPlacaOriginal || !intercambioPlacaNueva) return;
+    const busOriginal = cruce.find(r => r.BUS === intercambioPlacaOriginal.toUpperCase());
+    const tarifaOriginal = busOriginal ? (busOriginal.TARIFA || 0) : 0;
+    try {
+      const res = await api('/api/intercambios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fecha: dbStatus?.fecha || '',
+          empresa: dbStatus?.empresa || '',
+          denominacion: dbStatus?.denominacion || '',
+          placa_original: intercambioPlacaOriginal,
+          placa_nueva: intercambioPlacaNueva,
+          tarifa_original: tarifaOriginal,
+        }),
+      });
+      if (res.status === 'ok') {
+        setIntercambios(res.intercambios || []);
+        setShowIntercambioModal(false);
+        setIntercambioPlacaOriginal('');
+        setIntercambioPlacaNueva('');
+        setSelectedBuses(new Set());
+      }
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const eliminarIntercambio = async (id) => {
+    try {
+      const res = await api('/api/intercambios/' + id, { method: 'DELETE' });
+      if (res.status === 'ok') setIntercambios(res.intercambios || []);
+    } catch {}
+  };
+
   const eliminarUnificacion = async (id) => {
     try {
       const res = await api('/api/unificaciones/' + id, { method: 'DELETE' });
@@ -1347,11 +1396,13 @@ export default function App() {
     const f = fechaOverride || dbStatus?.fecha;
     if (!f) return;
     try {
-      const [resUnif, resEjec] = await Promise.all([
+      const [resUnif, resEjec, resInter] = await Promise.all([
         api(`/api/unificaciones?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
         api(`/api/ejecutados?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}`),
+        api(`/api/intercambios?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
       ]);
       setUnificaciones(resUnif.unificaciones || []);
+      setIntercambios(resInter.intercambios || []);
       const ejec = new Set([
         ...(resUnif.unificaciones || []).flatMap(u => u.buses_origen || []),
         ...(resEjec.ejecutados_db || []),
@@ -1430,6 +1481,38 @@ export default function App() {
             <MetricCard title="PASAJEROS REALES" value={filteredMetrics.pasajeros_reales} color="green" icon={<i className="fa-solid fa-user-check" />} />
             <MetricCard title="ASIENTOS VACÍOS" value={filteredMetrics.asientos_vacios} color="red" icon={<i className="fa-solid fa-chair" />} />
             <MetricCard title="PÉRDIDA PONDERADA" value={(() => { const c = filteredMetrics.capacidad || 1, t = filteredMetrics.tarifa_total || 0, v = filteredMetrics.asientos_vacios > 0 ? filteredMetrics.asientos_vacios : 0; return `S/${(t / c * v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`; })()} color="red" icon={<i className="fa-solid fa-scale-unbalanced" />} />
+          </section>
+        )}
+
+        {activeTab === 'cosecha' && kilosExport && cruce.length > 0 && (
+          <section style={{ margin: '12px 0', padding: 16, background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fa-solid fa-weight-hanging" style={{ color: '#6366f1', fontSize: 18 }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>Kilos Export:</span>
+                <span style={{ fontWeight: 700, fontSize: 16, color: '#111' }}>{kilosExport.kilos?.toLocaleString(undefined, {minimumFractionDigits:2})} kg</span>
+              </div>
+              <div style={{ width: 1, height: 28, background: '#d1d5db' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fa-solid fa-coins" style={{ color: '#d97706', fontSize: 18 }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>Tarifa Total:</span>
+                <span style={{ fontWeight: 700, fontSize: 16, color: '#111' }}>S/{kilosExport.tarifa_total?.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
+              </div>
+              <div style={{ width: 1, height: 28, background: '#d1d5db' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <i className="fa-solid fa-tag" style={{ color: '#059669', fontSize: 18 }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>S//kg:</span>
+                <span style={{ fontWeight: 700, fontSize: 16, color: '#059669' }}>{kilosExport.soles_por_kg?.toFixed(4)}</span>
+              </div>
+              <div style={{ width: 1, height: 28, background: '#d1d5db' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <i className="fa-solid fa-dollar-sign" style={{ color: '#2563eb', fontSize: 18 }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>$/kg:</span>
+                <span style={{ fontWeight: 700, fontSize: 16, color: '#2563eb' }}>{kilosExport.kilos > 0 ? ((kilosExport.tarifa_total / tipoCambio) / kilosExport.kilos).toFixed(4) : '0'}</span>
+                <span style={{ fontSize: 12, color: '#6b7280', marginLeft: 4 }}>T.C:</span>
+                <input type="number" step="0.01" value={tipoCambio} onChange={e => setTipoCambio(parseFloat(e.target.value) || 1)} style={{ width: 60, padding: '2px 6px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, fontWeight: 600 }} />
+              </div>
+            </div>
           </section>
         )}
 
@@ -1639,6 +1722,33 @@ export default function App() {
               </div>
             )}
 
+            {showIntercambioModal && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowIntercambioModal(false)}>
+                <div style={{ background: '#fff', borderRadius: 12, width: '90%', maxWidth: 500, padding: 24, position: 'relative' }} onClick={e => e.stopPropagation()}>
+                  <button onClick={() => setShowIntercambioModal(false)} style={{ position: 'absolute', top: 12, right: 16, background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748b' }}>x</button>
+                  <h3 style={{ margin: '0 0 16px' }}><i className="fa-solid fa-right-left" style={{ marginRight: 8, color: '#2563eb' }} />Intercambiar Placa</h3>
+                  <p style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+                    Placa original: <b>{intercambioPlacaOriginal}</b>
+                    {(() => { const b = cruce.find(r => r.BUS === intercambioPlacaOriginal); return b ? ` — Tarifa: S/${b.TARIFA?.toLocaleString()}` : ''; })()}
+                  </p>
+                  <label style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'block' }}>Placa nueva (reemplazo):</label>
+                  <input
+                    type="text"
+                    value={intercambioPlacaNueva}
+                    onChange={e => setIntercambioPlacaNueva(e.target.value.toUpperCase())}
+                    placeholder="Ej: X2Y-123"
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14, marginBottom: 16, fontFamily: 'var(--mono)' }}
+                  />
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <button onClick={() => setShowIntercambioModal(false)} className="btn" style={{ background: '#f1f5f9', color: '#334155' }}>Cancelar</button>
+                    <button onClick={guardarIntercambio} disabled={!intercambioPlacaNueva.trim()} className="btn" style={{ background: '#2563eb', color: '#fff', border: 'none', opacity: intercambioPlacaNueva.trim() ? 1 : 0.5 }}>
+                      <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Guardar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {showDetailModal && detailPlaca && (
               <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowDetailModal(false)}>
                 <div style={{ background: '#fff', borderRadius: 12, width: '90%', maxWidth: 900, maxHeight: '85vh', overflow: 'auto', padding: 24, position: 'relative', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
@@ -1699,6 +1809,12 @@ export default function App() {
                       Unificar ({selectedBuses.size})
                     </button>
                   )}
+                  {selectedBuses.size === 1 && (
+                    <button onClick={() => { setIntercambioPlacaOriginal([...selectedBuses][0]); setShowIntercambioModal(true); }} className="btn" style={{ background: '#2563eb', color: '#fff', border: 'none' }}>
+                      <i className="fa-solid fa-right-left" style={{ marginRight: 4 }} />
+                      Intercambiar
+                    </button>
+                  )}
                   {selectedBuses.size > 0 && (
                     <button onClick={darDeBaja} className="btn" style={{ background: '#dc2626', color: '#fff', border: 'none' }}>
                       <i className="fa-solid fa-ban" style={{ marginRight: 4 }} />
@@ -1722,6 +1838,12 @@ export default function App() {
                         De baja: {busesEjecutados.size}
                       </span>
                     )}
+                    {intercambios.length > 0 && (
+                      <span style={{ color: '#2563eb', fontWeight: 600 }}>
+                        <i className="fa-solid fa-right-left" style={{ marginRight: 4 }} />
+                        Intercambios: {intercambios.length}
+                      </span>
+                    )}
                   </div>
                 )}
                 {unificaciones.length > 0 && (
@@ -1734,6 +1856,22 @@ export default function App() {
                         <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: '#7c3aed' }}>{u.placa_destino}</span>
                         <span style={{ color: '#94a3b8', fontSize: 11 }}>(día siguiente)</span>
                         <button onClick={() => eliminarUnificacion(u.id)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>
+                          <i className="fa-solid fa-trash-can" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {intercambios.length > 0 && (
+                  <div style={{ marginTop: 10, padding: 12, background: '#eff6ff', borderRadius: 8, border: '1px solid #bfdbfe' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#2563eb', marginBottom: 8 }}>Intercambios guardados:</div>
+                    {intercambios.map(ic => (
+                      <div key={ic.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid #dbeafe', fontSize: 12 }}>
+                        <span style={{ fontFamily: 'var(--mono)', color: '#64748b' }}>{ic.placa_original}</span>
+                        <i className="fa-solid fa-right-left" style={{ color: '#2563eb', fontSize: 10 }} />
+                        <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: '#2563eb' }}>{ic.placa_nueva}</span>
+                        <span style={{ color: '#94a3b8', fontSize: 11 }}>Tarifa orig: S/{ic.tarifa_original?.toLocaleString()}</span>
+                        <button onClick={() => eliminarIntercambio(ic.id)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>
                           <i className="fa-solid fa-trash-can" />
                         </button>
                       </div>
@@ -2186,97 +2324,6 @@ export default function App() {
           </>
         )}
 
-        {activeTab === 'comparativa' && (
-          <section style={{ padding: '0 8px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-              <h2 style={{ margin: 0 }}><i className="fa-solid fa-arrows-left-right" style={{ marginRight: 8 }} />Comparativa Diaria</h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <select value={comparativaFecha} onChange={e => { setComparativaFecha(e.target.value); loadComparativa(e.target.value); }} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>
-                  {comparativa?.fechas_disponibles?.length > 0 ? comparativa.fechas_disponibles.map(f => (
-                    <option key={f} value={f}>{new Date(f + 'T12:00:00').toLocaleDateString('es-PE', { weekday: 'short', day: 'numeric', month: 'short' })}</option>
-                  )) : <option value="">Cargando...</option>}
-                </select>
-                <button onClick={() => loadComparativa(comparativaFecha)} disabled={comparativaLoading} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
-                  {comparativaLoading ? <><span className="spinner" style={{ marginRight: 6 }} />Cargando...</> : <><i className="fa-solid fa-rotate-right" style={{ marginRight: 4 }} />Actualizar</>}
-                </button>
-              </div>
-            </div>
-
-            {comparativaLoading && !comparativa && (
-              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}><span className="spinner" style={{ marginRight: 8 }} />Cargando comparativa...</div>
-            )}
-
-            {comparativa?.error && (
-              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>{comparativa.error}</div>
-            )}
-
-            {comparativa?.hoy && comparativa?.ayer && (() => {
-              const h = comparativa.hoy;
-              const a = comparativa.ayer;
-              const m = comparativa.mejoras;
-              const DeltaArrow = ({ val, invertColor }) => {
-                if (val === 0) return <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>—</span>;
-                const positive = invertColor ? val < 0 : val > 0;
-                return (
-                  <span style={{ color: positive ? '#16a34a' : '#ef4444', fontSize: 12, fontWeight: 700 }}>
-                    {val > 0 ? '▲' : '▼'} {Math.abs(val).toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                  </span>
-                );
-              };
-              const cards = [
-                { label: 'Ocupación', hoy: `${h.ocupacion}%`, ayer: `${a.ocupacion}%`, delta: m.ocupacion.valor, pct: m.ocupacion.pct, icon: 'fa-percentage', invert: false },
-                { label: 'Buses', hoy: h.buses, ayer: a.buses, delta: m.buses.valor, pct: m.buses.pct, icon: 'fa-bus', invert: true },
-                { label: 'Pasajeros', hoy: h.pasajeros, ayer: a.pasajeros, delta: m.pasajeros.valor, pct: m.pasajeros.pct, icon: 'fa-users', invert: false },
-                { label: 'Asientos vacíos', hoy: h.asientos_vacios, ayer: a.asientos_vacios, delta: m.asientos_vacios.valor, pct: m.asientos_vacios.pct, icon: 'fa-chair', invert: true },
-                { label: 'Costo/Persona', hoy: `S/${h.costo_por_persona}`, ayer: `S/${a.costo_por_persona}`, delta: m.costo_por_persona.valor, pct: m.costo_por_persona.pct, icon: 'fa-money-bill', invert: true },
-                { label: 'Pérdida', hoy: `S/${h.perdida.toLocaleString()}`, ayer: `S/${a.perdida.toLocaleString()}`, delta: m.perdida.valor, pct: m.perdida.pct, icon: 'fa-arrow-trend-down', invert: true },
-                { label: 'Tarifa Total', hoy: `S/${h.tarifa.toLocaleString()}`, ayer: `S/${a.tarifa.toLocaleString()}`, delta: m.tarifa.valor, pct: m.tarifa.pct, icon: 'fa-receipt', invert: true },
-              ];
-              return (
-                <>
-                  <div style={{ display: 'flex', gap: 16, marginBottom: 20, fontSize: 13 }}>
-                    <div style={{ padding: '8px 16px', borderRadius: 8, background: '#eff6ff', color: '#1e40af', fontWeight: 600 }}>
-                      <i className="fa-solid fa-calendar-day" style={{ marginRight: 6 }} />
-                      Hoy: {new Date(h.fecha + 'T12:00:00').toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long' })}
-                    </div>
-                    <div style={{ padding: '8px 16px', borderRadius: 8, background: '#f5f5f4', color: '#57534e', fontWeight: 600 }}>
-                      <i className="fa-solid fa-calendar" style={{ marginRight: 6 }} />
-                      Ayer: {new Date(a.fecha + 'T12:00:00').toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long' })}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 24 }}>
-                    {cards.map(c => (
-                      <div key={c.label} style={{ padding: 16, borderRadius: 10, background: 'var(--bg-card, #fff)', border: '1px solid var(--border, #e5e7eb)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                          <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase' }}>
-                            <i className={`fa-solid ${c.icon}`} style={{ marginRight: 4 }} />{c.label}
-                          </span>
-                          <DeltaArrow val={c.delta} invertColor={c.invert} />
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                          <div>
-                            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{c.hoy}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>hoy</div>
-                          </div>
-                          <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-dim)' }}>{c.ayer}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>anterior</div>
-                          </div>
-                        </div>
-                        {c.pct !== 0 && (
-                          <div style={{ fontSize: 11, marginTop: 6, color: (c.invert ? c.pct < 0 : c.pct > 0) ? '#16a34a' : '#ef4444', fontWeight: 600 }}>
-                            {c.pct > 0 ? '+' : ''}{c.pct}% vs día anterior
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </>
-              );
-            })()}
-          </section>
-        )}
 
         {activeTab === 'bajas' && (
           <section style={{ padding: '0 8px' }}>

@@ -389,6 +389,15 @@ def _get_db_conn():
         password=os.getenv("DB_PASSWORD"),
     )
 
+def _get_zupra_conn():
+    return psycopg2.connect(
+        host=os.getenv("ZUPRA_DB_HOST"),
+        port=os.getenv("ZUPRA_DB_PORT", "5432"),
+        dbname=os.getenv("ZUPRA_DB_NAME", "postgres"),
+        user=os.getenv("ZUPRA_DB_USER"),
+        password=os.getenv("ZUPRA_DB_PASSWORD"),
+    )
+
 
 class DBLoadRequest(BaseModel):
     session_id: str = "default"
@@ -1467,6 +1476,100 @@ def eliminar_unificacion(unif_id: int):
     }
 
 
+# ─── Intercambios ──────────────────────────────────────────────────────────
+
+def _ensure_intercambios_table():
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intercambios_rebalanceo (
+            id SERIAL PRIMARY KEY,
+            fecha DATE NOT NULL,
+            empresa VARCHAR(100),
+            denominacion VARCHAR(200),
+            placa_original VARCHAR(20) NOT NULL,
+            placa_nueva VARCHAR(20) NOT NULL,
+            tarifa_original NUMERIC(12,2) DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+class IntercambioRequest(BaseModel):
+    fecha: str
+    empresa: str = ""
+    denominacion: str = ""
+    placa_original: str = ""
+    placa_nueva: str = ""
+    tarifa_original: float = 0
+
+
+@app.post("/api/intercambios")
+def crear_intercambio(req: IntercambioRequest):
+    _ensure_intercambios_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO intercambios_rebalanceo (fecha, empresa, denominacion, placa_original, placa_nueva, tarifa_original)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (req.fecha, req.empresa, req.denominacion,
+          req.placa_original.strip().upper(), req.placa_nueva.strip().upper(), req.tarifa_original))
+    conn.commit()
+    cur.execute("""
+        SELECT id, fecha, placa_original, placa_nueva, tarifa_original FROM intercambios_rebalanceo
+        WHERE fecha = %s ORDER BY created_at
+    """, (req.fecha,))
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "status": "ok",
+        "intercambios": [{"id": r[0], "fecha": str(r[1]), "placa_original": r[2], "placa_nueva": r[3], "tarifa_original": float(r[4])} for r in rows]
+    }
+
+
+@app.get("/api/intercambios")
+def get_intercambios(fecha: str = Query(""), empresa: str = Query("")):
+    _ensure_intercambios_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, fecha, placa_original, placa_nueva, tarifa_original FROM intercambios_rebalanceo
+        WHERE fecha = %s ORDER BY created_at
+    """, (fecha,))
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "intercambios": [{"id": r[0], "fecha": str(r[1]), "placa_original": r[2], "placa_nueva": r[3], "tarifa_original": float(r[4])} for r in rows]
+    }
+
+
+@app.delete("/api/intercambios/{intercambio_id}")
+def eliminar_intercambio(intercambio_id: int):
+    _ensure_intercambios_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT fecha FROM intercambios_rebalanceo WHERE id = %s", (intercambio_id,))
+    row = cur.fetchone()
+    fecha = row[0] if row else None
+    cur.execute("DELETE FROM intercambios_rebalanceo WHERE id = %s", (intercambio_id,))
+    conn.commit()
+    if fecha:
+        cur.execute("""
+            SELECT id, fecha, placa_original, placa_nueva, tarifa_original FROM intercambios_rebalanceo
+            WHERE fecha = %s ORDER BY created_at
+        """, (fecha,))
+    else:
+        cur.execute("SELECT id, fecha, placa_original, placa_nueva, tarifa_original FROM intercambios_rebalanceo WHERE 1=0")
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "status": "ok",
+        "intercambios": [{"id": r[0], "fecha": str(r[1]), "placa_original": r[2], "placa_nueva": r[3], "tarifa_original": float(r[4])} for r in rows]
+    }
+
+
 # ─── Rutas Mapa ────────────────────────────────────────────────────────────
 ZONAS_COORDS = {
     "CASA GRANDE": {"lat": -7.7446, "lng": -79.1881},
@@ -1939,6 +2042,27 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                 })
                 acciones_activas.append({"tipo": "unificacion", "buses": [b.strip().upper() for b in u["buses_origen"]], "placa_destino": u["placa_destino"], "ahorro_diario": round(ahorro, 2), "desde": dia_str})
 
+            # Calculate savings from intercambios
+            _ensure_intercambios_table()
+            cur.execute("""
+                SELECT placa_original, placa_nueva, tarifa_original FROM intercambios_rebalanceo WHERE fecha = %s
+            """, (dia_str,))
+            intercambios_dia = [{"placa_original": r[0], "placa_nueva": r[1], "tarifa_original": float(r[2])} for r in cur.fetchall()]
+            for ic in intercambios_dia:
+                tarifa_nueva = _get_tarifa_bus(dia_sig, ic["placa_nueva"])
+                if tarifa_nueva == 0:
+                    tarifa_nueva = _get_tarifa_bus(dia_str, ic["placa_nueva"])
+                ahorro = ic["tarifa_original"] - tarifa_nueva
+                detalle_dia.append({
+                    "tipo": "intercambio",
+                    "placa_original": ic["placa_original"],
+                    "placa_nueva": ic["placa_nueva"],
+                    "tarifa_original": round(ic["tarifa_original"], 2),
+                    "tarifa_nueva": round(tarifa_nueva, 2),
+                    "ahorro": round(ahorro, 2),
+                })
+                acciones_activas.append({"tipo": "intercambio", "placa_original": ic["placa_original"], "placa_nueva": ic["placa_nueva"], "ahorro_diario": round(ahorro, 2), "desde": dia_str})
+
             # Accumulated savings from previous days' actions still active
             ahorro_previo = sum(a["ahorro_diario"] for a in acciones_activas if a["desde"] < dia_str)
             ahorro_nuevo = sum(d["ahorro"] for d in detalle_dia)
@@ -2320,3 +2444,41 @@ def count_bajas():
     cur.close()
     conn.close()
     return {"count": count}
+
+
+@app.get("/api/kilos-exportacion")
+def get_kilos_exportacion(fecha: str = Query(""), session_id: str = Query("default")):
+    if not fecha:
+        return {"kilos": 0, "error": "fecha requerida"}
+    try:
+        conn = _get_zupra_conn()
+        query = """
+        SELECT COALESCE(SUM(COALESCE(kilos, 0)), 0) AS kilos
+        FROM raw.all_recepciones
+        WHERE pais_origen_fuente = 'Peru'
+          AND fecha_recepcion::date = %s
+          AND LOWER(desc_tipo_fruta) = 'exportacion'
+        """
+        cur = conn.cursor()
+        cur.execute(query, (fecha,))
+        row = cur.fetchone()
+        kilos = float(row[0]) if row else 0
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"kilos-exportacion DB error: {e}")
+        kilos = 0
+
+    sess = get_session(session_id)
+    cruce = sess.get("cruce")
+    tarifa_total = 0
+    if cruce is not None and len(cruce) > 0:
+        tarifa_total = float(cruce["TARIFA"].sum())
+
+    soles_por_kg = round(tarifa_total / kilos, 4) if kilos > 0 else 0
+
+    return {
+        "kilos": round(kilos, 2),
+        "tarifa_total": round(tarifa_total, 2),
+        "soles_por_kg": soles_por_kg,
+    }
