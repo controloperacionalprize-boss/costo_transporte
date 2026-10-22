@@ -2063,7 +2063,7 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                         "tarifa_nueva": 0,
                         "ahorro": round(tarifa, 2),
                     })
-                    acciones_activas.append({"tipo": "baja", "bus": bus, "ahorro_diario": round(tarifa, 2), "desde": dia_str})
+                    acciones_activas.append({"tipo": "baja", "bus": bus, "ahorro_diario": round(tarifa, 2), "desde": dia_sig})
 
             # Calculate savings from unificaciones
             for u in unificaciones_dia:
@@ -2080,7 +2080,7 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                     "tarifa_nueva": round(tarifa_destino, 2),
                     "ahorro": round(ahorro, 2),
                 })
-                acciones_activas.append({"tipo": "unificacion", "buses": [b.strip().upper() for b in u["buses_origen"]], "placa_destino": u["placa_destino"], "ahorro_diario": round(ahorro, 2), "desde": dia_str})
+                acciones_activas.append({"tipo": "unificacion", "buses": [b.strip().upper() for b in u["buses_origen"]], "placa_destino": u["placa_destino"], "ahorro_diario": round(ahorro, 2), "desde": dia_sig})
 
             # Calculate savings from intercambios
             _ensure_intercambios_table()
@@ -2101,19 +2101,19 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                     "tarifa_nueva": round(tarifa_nueva, 2),
                     "ahorro": round(ahorro, 2),
                 })
-                acciones_activas.append({"tipo": "intercambio", "placa_original": ic["placa_original"], "placa_nueva": ic["placa_nueva"], "ahorro_diario": round(ahorro, 2), "desde": dia_str})
+                acciones_activas.append({"tipo": "intercambio", "placa_original": ic["placa_original"], "placa_nueva": ic["placa_nueva"], "ahorro_diario": round(ahorro, 2), "desde": dia_sig})
 
-            # Accumulated savings from previous days' actions still active
-            ahorro_previo = sum(a["ahorro_diario"] for a in acciones_activas if a["desde"] < dia_str)
-            ahorro_nuevo = sum(d["ahorro"] for d in detalle_dia)
-            ahorro_dia_total = ahorro_previo + ahorro_nuevo
+            # Savings only from actions started on previous days (desde <= today)
+            ahorro_activo = sum(a["ahorro_diario"] for a in acciones_activas if a["desde"] <= dia_str)
+            ahorro_nuevo = sum(d["ahorro"] for d in detalle_dia)  # informative: savings that start tomorrow
+            ahorro_dia_total = ahorro_activo
             ahorro_acumulado += ahorro_dia_total
 
             resultado_dias.append({
                 "fecha": dia_str,
                 "dia": ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"][dia.weekday()],
                 "nuevas_acciones": detalle_dia,
-                "ahorro_previo": round(ahorro_previo, 2),
+                "ahorro_previo": round(ahorro_activo, 2),
                 "ahorro_nuevo": round(ahorro_nuevo, 2),
                 "ahorro_dia": round(ahorro_dia_total, 2),
                 "ahorro_acumulado": round(ahorro_acumulado, 2),
