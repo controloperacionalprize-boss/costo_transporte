@@ -266,13 +266,15 @@ def _load_db_data_sync(sess, conn, fecha, fecha_desde, fecha_hasta, empresa):
     col_h_act = next((c for c in horas_cols if c.strip().lower() == "actividad"), None) or _find_col(horas_cols, "actividad", "labor")
     col_h_fecha = _find_col(horas_cols, "fecha")
     col_h_nombre = next((c for c in horas_cols if c.strip().lower() == "trabajador"), None) or _find_col(horas_cols, "nombre")
+    col_h_grupo = next((c for c in horas_cols if c.strip().lower() == "codigo grupo"), None)
     if col_h_dni and col_h_act:
-        h_select = ", ".join(f'"{c}"' for c in [col_h_dni, col_h_act, col_h_fecha, col_h_nombre] if c)
+        h_select = ", ".join(f'"{c}"' for c in [col_h_dni, col_h_act, col_h_fecha, col_h_nombre, col_h_grupo] if c)
         where_h = f'WHERE "{col_h_fecha}" >= CURRENT_DATE - INTERVAL \'14 days\'' if col_h_fecha else ""
         df_actividad = pd.read_sql(f"SELECT {h_select} FROM (SELECT {h_select} FROM rpt_formato_horas_aq1 UNION ALL SELECT {h_select} FROM rpt_formato_horas_aq2) h {where_h}", conn)
         rename_h = {col_h_dni: "Documento", col_h_act: "ACTIVIDAD"}
         if col_h_fecha: rename_h[col_h_fecha] = "FECHA"
         if col_h_nombre: rename_h[col_h_nombre] = "TRABAJADOR"
+        if col_h_grupo: rename_h[col_h_grupo] = "GRUPO"
         df_actividad.rename(columns=rename_h, inplace=True)
         sess["df_actividad"] = df_actividad
 
@@ -482,11 +484,12 @@ def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha
         col_h_act = next((c for c in horas_cols if c.strip().lower() == "actividad"), None) or _find_col(horas_cols, "actividad", "labor")
         col_h_fecha = _find_col(horas_cols, "fecha")
         col_h_nombre = next((c for c in horas_cols if c.strip().lower() == "trabajador"), None) or _find_col(horas_cols, "nombre")
+        col_h_grupo = next((c for c in horas_cols if c.strip().lower() == "codigo grupo"), None)
 
         if not all([col_h_dni, col_h_act]):
             raise ValueError(f"No se encontraron columnas necesarias en horas. Columnas: {horas_cols}")
 
-        h_select = ", ".join(f'"{c}"' for c in [col_h_dni, col_h_act, col_h_fecha, col_h_nombre] if c)
+        h_select = ", ".join(f'"{c}"' for c in [col_h_dni, col_h_act, col_h_fecha, col_h_nombre, col_h_grupo] if c)
         where_h = f'WHERE "{col_h_fecha}" >= CURRENT_DATE - INTERVAL \'14 days\'' if col_h_fecha else ""
         query_horas = f"""
             SELECT {h_select}
@@ -503,6 +506,8 @@ def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha
             rename_h[col_h_fecha] = "FECHA"
         if col_h_nombre:
             rename_h[col_h_nombre] = "TRABAJADOR"
+        if col_h_grupo:
+            rename_h[col_h_grupo] = "GRUPO"
         df_actividad.rename(columns=rename_h, inplace=True)
         sess["df_actividad"] = df_actividad
         sess["db_progress"] = {"step": f"Horas OK ({len(df_actividad):,}). Consultando asistencia...", "pct": 70, "done": False, "errors": []}
@@ -941,6 +946,19 @@ def process(req: ProcessRequest):
                     personas["PASAJERO"] = personas["PASAJERO"].fillna("")
                     personas.drop(columns=["DNI_NOM", "PASAJERO_H"], inplace=True, errors="ignore")
 
+    # --- Cruzar grupo desde horas ---
+    if df_actividad is not None and "GRUPO" in df_actividad.columns:
+        df_grp = df_actividad.copy()
+        df_grp.columns = df_grp.columns.str.strip()
+        grp_dni_col = next((c for c in df_grp.columns if "DOCUMENTO" in c.upper() or "DNI" in c.upper()), None)
+        if grp_dni_col:
+            df_grp[grp_dni_col] = df_grp[grp_dni_col].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            grupo_map = df_grp.drop_duplicates(subset=[grp_dni_col], keep="last")[[grp_dni_col, "GRUPO"]]
+            grupo_map.columns = ["DNI_GRP", "GRUPO"]
+            personas = personas.merge(grupo_map, left_on="DNI PASA.", right_on="DNI_GRP", how="left")
+            personas["GRUPO"] = personas["GRUPO"].fillna("")
+            personas.drop(columns=["DNI_GRP"], inplace=True, errors="ignore")
+
     # --- Debug: log count per placa before cruce ---
     import logging
     for p in ["Y1P-032"]:
@@ -1151,6 +1169,7 @@ def rebalanceo(req: RebalanceoRequest):
     logger.info(f"Proximidad calculada para {len(bus_zones_nearby)} buses")
 
     recomendaciones = []
+    buses_receptores = set()
 
     def _origen_ruta(ruta):
         r = str(ruta)
@@ -1160,7 +1179,14 @@ def rebalanceo(req: RebalanceoRequest):
     buses_con_espacio = buses_con_espacio.copy()
     buses_con_espacio["_ORIGEN_RUTA"] = buses_con_espacio["RUTA"].apply(_origen_ruta)
 
+    # Ordenar buses_baja por ocupacion ascendente (los mas criticos primero)
+    buses_baja = buses_baja.sort_values("% OCUP. REAL", ascending=True)
+
     for _, bus_b in buses_baja.iterrows():
+        placa_baja_check = bus_b["BUS"]
+        # Si este bus ya es receptor de pasajeros de otro eliminado, no puede eliminarse
+        if placa_baja_check in buses_receptores:
+            continue
         placa_baja = bus_b["BUS"]
         ruta_baja = bus_b["RUTA"]
         origen_baja = _origen_ruta(ruta_baja)
@@ -1201,6 +1227,7 @@ def rebalanceo(req: RebalanceoRequest):
         for _, persona in personas_bus.iterrows():
             asignado = False
             actividad = persona.get("ACTIVIDAD", "") if "ACTIVIDAD" in personas_bus.columns else ""
+            grupo = persona.get("GRUPO", "") if "GRUPO" in personas_bus.columns else ""
             for dest_placa in espacio_restante:
                 if espacio_restante[dest_placa] > 0:
                     ceco_dest = ""
@@ -1216,6 +1243,7 @@ def rebalanceo(req: RebalanceoRequest):
                     asignaciones.append({
                         "DNI": str(_safe(persona["DNI PASA."])),
                         "PASAJERO": str(_safe(persona["PASAJERO"])),
+                        "GRUPO": str(_safe(grupo)),
                         "ACTIVIDAD": str(_safe(actividad)),
                         "PROM_JARRAS_SEM": round(float(_safe(persona["PROM_JARRAS_SEM"], 0)), 1),
                         "BUS_ORIGEN": str(placa_baja),
@@ -1231,6 +1259,7 @@ def rebalanceo(req: RebalanceoRequest):
                 asignaciones.append({
                     "DNI": str(_safe(persona["DNI PASA."])),
                     "PASAJERO": str(_safe(persona["PASAJERO"])),
+                    "GRUPO": str(_safe(grupo)),
                     "ACTIVIDAD": str(_safe(actividad)),
                     "PROM_JARRAS_SEM": round(float(_safe(persona["PROM_JARRAS_SEM"], 0)), 1),
                     "BUS_ORIGEN": str(placa_baja),
@@ -1255,6 +1284,16 @@ def rebalanceo(req: RebalanceoRequest):
                 consolidar_con = str(bc["BUS"])
                 break
 
+        # Registrar buses destino como receptores (no pueden ser eliminados)
+        for a in asignaciones:
+            if a["BUS_DESTINO"] != "SIN ESPACIO":
+                buses_receptores.add(a["BUS_DESTINO"])
+        if consolidar_con:
+            buses_receptores.add(consolidar_con)
+
+        ocup_val = round(float(_safe(bus_b["% OCUP. REAL"], 0)), 1)
+        prioridad = "critico" if ocup_val < 50 else "urgente" if ocup_val < 65 else "recomendado"
+
         recomendaciones.append({
             "placa": placa_baja,
             "ruta": str(_safe(ruta_baja, "")),
@@ -1263,11 +1302,12 @@ def rebalanceo(req: RebalanceoRequest):
             "tipo": str(_safe(bus_b["T_BUS"], "")),
             "capacidad": int(bus_b["CAPACIDAD"]),
             "pasajeros": int(bus_b["PAS_REAL"]),
-            "ocup": round(float(_safe(bus_b["% OCUP. REAL"], 0)), 1),
+            "ocup": ocup_val,
             "tarifa": round(float(_safe(bus_b["TARIFA"], 0)), 2),
             "costo_pasajero": round(float(_safe(bus_b["TARIFA"], 0)) / max(int(_safe(bus_b["PAS_REAL"], 0)), 1), 2),
             "perdida": round((float(_safe(bus_b["TARIFA"], 0)) / max(int(_safe(bus_b["CAPACIDAD"], 1)), 1)) * int(_safe(bus_b["ASIENTOS_VACIOS"], 0)), 2),
             "consolidar_con": consolidar_con,
+            "prioridad": prioridad,
             "asignaciones": asignaciones,
         })
 

@@ -1263,6 +1263,7 @@ export default function App() {
     { field: 'cargo', headerName: 'Cargo', sortable: true, filter: true, width: 180 },
     { field: 'area', headerName: 'Área', sortable: true, filter: true, width: 160 },
     { field: 'ACTIVIDAD', sortable: true, filter: true, width: 140 },
+    { field: 'GRUPO', headerName: 'Grupo', sortable: true, filter: true, width: 140 },
     {
       field: 'PROM_JARRAS_SEM', headerName: 'Jarras/Sem',
       sortable: true, filter: true, width: 130,
@@ -1898,6 +1899,11 @@ export default function App() {
                 return (
                 <div key={idx} className={`rebal-card ${rebalOpen[idx] ? 'open' : ''}`}>
                   <div className="rebal-card-header" onClick={() => toggleRebal(idx)}>
+                    {rec.prioridad && (
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, color: '#fff', marginRight: 6, background: rec.prioridad === 'critico' ? '#dc2626' : rec.prioridad === 'urgente' ? '#f59e0b' : '#6b7280' }}>
+                        {rec.prioridad === 'critico' ? 'CRITICO' : rec.prioridad === 'urgente' ? 'URGENTE' : 'RECOMENDADO'}
+                      </span>
+                    )}
                     <span className="rebal-placa">{rec.placa || rec.placa_origen || rec.bus}</span>
                     <span className="rebal-info">
                       {rec.zona && <span className="badge" style={{marginRight:6}}>{rec.zona}</span>}
@@ -1920,7 +1926,7 @@ export default function App() {
                           <h4>Personas reasignables (por rendimiento)</h4>
                           <table className="mini-table">
                             <thead>
-                              <tr><th>DNI</th><th>Pasajero</th><th>Actividad</th><th>Jarras/Sem</th><th>Bus Destino</th><th>Zona Destino</th><th>Tipo</th><th>CECO Destino</th></tr>
+                              <tr><th>DNI</th><th>Pasajero</th><th>Grupo</th><th>Actividad</th><th>Jarras/Sem</th><th>Bus Destino</th><th>Zona Destino</th><th>Tipo</th><th>CECO Destino</th></tr>
                             </thead>
                             <tbody>
                               {(rec.asignaciones || rec.personas_reasignables || []).map((p, i) => {
@@ -1928,6 +1934,7 @@ export default function App() {
                                 <tr key={i}>
                                   <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{p.DNI || p.dni}</td>
                                   <td>{p.PASAJERO || p.pasajero || p.nombre}</td>
+                                  <td>{p.GRUPO || '-'}</td>
                                   <td>{p.ACTIVIDAD || p.actividad || '-'}</td>
                                   <td style={{ fontFamily: 'var(--mono)', color: (p.PROM_JARRAS_SEM || p.rendimiento || 0) >= 50 ? 'var(--green)' : 'inherit' }}>
                                     {p.PROM_JARRAS_SEM ?? p.rendimiento ?? '-'}
