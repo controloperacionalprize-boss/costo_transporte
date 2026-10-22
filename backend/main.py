@@ -24,6 +24,7 @@ class RebalanceoRequest(BaseModel):
     fecha: str = ""
     empresa: str = ""
     denominacion: str = ""
+    buses_seleccionados: list[str] = []
 
 app = FastAPI(title="Optimizacion Transporte Cosecha")
 
@@ -556,6 +557,104 @@ def _load_db_data(session_id: str, fecha: str = "", fecha_desde: str = "", fecha
         _y1p_ent = df_entrada[df_entrada["PLACA"] == "Y1P-032"]
         cnt_y1p = len(personas_db[personas_db["PLACA"] == "Y1P-032"])
         logging.info(f"DEBUG Y1P-032: asist_all={len(_y1p_all)}, entrada={len(_y1p_ent)}, personas_db={cnt_y1p}, distinct_dni={_y1p_ent['DNI PASA.'].nunique()}")
+        _t1g = personas_db[personas_db["PLACA"] == "T1G-967"]
+        logging.info(f"DEBUG T1G-967 ANTES bajas: {len(_t1g)} personas, distinct_dni={_t1g['DNI PASA.'].nunique()}")
+        # --- Marcar personal cesado (bajas) por empresa del bus ---
+        personas_db["CESADO"] = False
+        personas_db["FECHA_CESE"] = None
+        try:
+            fecha_viaje = fecha
+            cur2 = conn.cursor()
+            cur2.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'bajas_personal')")
+            if cur2.fetchone()[0]:
+                df_bajas = pd.read_sql(
+                    f"SELECT idcodigogeneral, fecha_cese, empresa FROM bajas_personal WHERE fecha_cese <= '{fecha_viaje}'",
+                    conn
+                )
+                if len(df_bajas) > 0:
+                    df_bajas["idcodigogeneral"] = df_bajas["idcodigogeneral"].astype(str).str.strip()
+                    df_bajas["empresa"] = df_bajas["empresa"].astype(str).str.strip().str.upper()
+                    df_bajas["fecha_cese"] = pd.to_datetime(df_bajas["fecha_cese"], errors="coerce")
+
+                    # Cruzar con fecha_ingreso de qbiz_funcionarios_raw por empresa
+                    cesados_dnis = df_bajas["idcodigogeneral"].unique().tolist()
+                    if len(cesados_dnis) > 0:
+                        ph = ",".join([f"'{d}'" for d in cesados_dnis])
+                        df_ingreso = pd.read_sql(f"""
+                            SELECT payload->>'DNI' AS dni,
+                                   payload->>'FECHA DE INGRESO' AS fecha_ingreso,
+                                   empresa AS empresa_qbiz
+                            FROM qbiz_funcionarios_raw
+                            WHERE payload->>'DNI' IN ({ph})
+                        """, conn)
+                        df_ingreso["dni"] = df_ingreso["dni"].astype(str).str.strip()
+                        df_ingreso["fecha_ingreso"] = pd.to_datetime(df_ingreso["fecha_ingreso"], errors="coerce")
+                        df_ingreso["empresa_qbiz"] = df_ingreso["empresa_qbiz"].astype(str).str.strip().str.upper()
+                        df_ingreso = df_ingreso.dropna(subset=["fecha_ingreso"])
+
+                        df_ingreso["_emp_norm"] = df_ingreso["empresa_qbiz"].apply(_norm_empresa)
+
+                        # Por cada DNI+empresa normalizada, tomar la fecha_ingreso más reciente
+                        df_ingreso = df_ingreso.sort_values("fecha_ingreso").drop_duplicates(subset=["dni", "_emp_norm"], keep="last")
+
+                        df_bajas["_emp_norm"] = df_bajas["empresa"].apply(_norm_empresa)
+
+                        # Merge con bajas por DNI + empresa normalizada
+                        df_bajas = df_bajas.merge(
+                            df_ingreso[["dni", "_emp_norm", "fecha_ingreso"]],
+                            left_on=["idcodigogeneral", "_emp_norm"],
+                            right_on=["dni", "_emp_norm"],
+                            how="left"
+                        )
+                        # Si fecha_ingreso > fecha_cese en la MISMA empresa → reingresó, no es cesado
+                        df_bajas = df_bajas[
+                            (df_bajas["fecha_ingreso"].isna()) |
+                            (df_bajas["fecha_ingreso"] <= df_bajas["fecha_cese"])
+                        ].copy()
+                        df_bajas.drop(columns=["dni", "empresa_bajas", "fecha_ingreso"], inplace=True, errors="ignore")
+                        logger.info(f"BAJAS: {len(df_bajas)} cesados después de filtrar reingresos por empresa (qbiz_funcionarios_raw)")
+
+                    def _norm_empresa(e):
+                        """Normalizar nombre de empresa a clave común."""
+                        e = str(e).strip().upper()
+                        e = e.replace("_", " ").replace(".", "")
+                        if "ANQA" in e and ("II" in e or "2" in e):
+                            return "AQ2"
+                        if "ANQA" in e:
+                            return "AQ1"
+                        return e
+
+                    df_bajas["_emp_norm"] = df_bajas["empresa"].apply(_norm_empresa)
+
+                    viajes_placa_emp = sess.get("viajes_placa")
+                    if viajes_placa_emp is not None and "EMPRESA" in viajes_placa_emp.columns:
+                        placa_empresa_raw = dict(zip(viajes_placa_emp["BUS"], viajes_placa_emp["EMPRESA"].astype(str).str.strip().str.upper()))
+                        placa_empresa_norm = {bus: _norm_empresa(emp) for bus, emp in placa_empresa_raw.items()}
+                        personas_db["_EMP_BUS"] = personas_db["PLACA"].map(placa_empresa_norm).fillna("")
+
+                        logger.info(f"BAJAS empresa mapping: viajes={set(placa_empresa_norm.values())}, bajas={set(df_bajas['_emp_norm'].unique())}")
+
+                        for emp_norm in df_bajas["_emp_norm"].unique():
+                            bajas_emp = df_bajas[df_bajas["_emp_norm"] == emp_norm]
+                            cesados_emp = set(bajas_emp["idcodigogeneral"])
+                            mask = (personas_db["_EMP_BUS"] == emp_norm) & (personas_db["DNI PASA."].isin(cesados_emp))
+                            personas_db.loc[mask, "CESADO"] = True
+                            bajas_map_emp = dict(zip(bajas_emp["idcodigogeneral"], bajas_emp["fecha_cese"].astype(str)))
+                            personas_db.loc[mask, "FECHA_CESE"] = personas_db.loc[mask, "DNI PASA."].map(bajas_map_emp)
+
+                        personas_db.drop(columns=["_EMP_BUS"], inplace=True, errors="ignore")
+                    else:
+                        cesados_set = set(df_bajas["idcodigogeneral"])
+                        personas_db["CESADO"] = personas_db["DNI PASA."].isin(cesados_set)
+                        bajas_map = dict(zip(df_bajas["idcodigogeneral"], df_bajas["fecha_cese"].astype(str)))
+                        personas_db["FECHA_CESE"] = personas_db["DNI PASA."].map(bajas_map)
+
+                    n_cesados = personas_db["CESADO"].sum()
+                    logger.info(f"BAJAS: {n_cesados} cesados marcados de {len(personas_db)} pasajeros (fecha={fecha_viaje})")
+            cur2.close()
+        except Exception as ex:
+            logger.warning(f"Error marcando bajas: {ex}")
+
         sess["personas"] = personas_db
         sess["asistencia_from_db"] = True
         sess["db_progress"] = {"step": f"Asistencia OK ({len(personas_db):,}). Consultando viajes...", "pct": 85, "done": False, "errors": []}
@@ -839,9 +938,17 @@ def process(req: ProcessRequest):
         cnt = len(personas[personas["PLACA"] == p])
         logging.info(f"DEBUG PLACA {p}: {cnt} personas before cruce")
     # --- Cruce por placa ---
-    asist_placa = personas.groupby("PLACA").agg(PAS_REAL=("DNI PASA.", "count")).reset_index()
+    personas_activas = personas[personas.get("CESADO", pd.Series(False, index=personas.index)) == False] if "CESADO" in personas.columns else personas
+    asist_placa = personas_activas.groupby("PLACA").agg(PAS_REAL=("DNI PASA.", "count")).reset_index()
+    if "CESADO" in personas.columns:
+        cesados_placa = personas[personas["CESADO"] == True].groupby("PLACA").agg(PAS_CESADOS=("DNI PASA.", "count")).reset_index()
+        asist_placa = asist_placa.merge(cesados_placa, on="PLACA", how="left")
+        asist_placa["PAS_CESADOS"] = asist_placa["PAS_CESADOS"].fillna(0).astype(int)
+    else:
+        asist_placa["PAS_CESADOS"] = 0
     cruce = viajes_placa.merge(asist_placa, left_on="BUS", right_on="PLACA", how="left")
     cruce["PAS_REAL"] = cruce["PAS_REAL"].fillna(0).astype(int)
+    cruce["PAS_CESADOS"] = cruce["PAS_CESADOS"].fillna(0).astype(int) if "PAS_CESADOS" in cruce.columns else 0
     cruce["ASIENTOS_VACIOS"] = cruce["CAPACIDAD"] - cruce["PAS_REAL"]
     cruce["% OCUP. REAL"] = cruce.apply(
         lambda r: round(r["PAS_REAL"] / r["CAPACIDAD"] * 100, 1) if r["CAPACIDAD"] > 0 else 0, axis=1
@@ -1020,7 +1127,11 @@ def rebalanceo(req: RebalanceoRequest):
     placas_viajes = viajes_placa["BUS"].unique().tolist() if viajes_placa is not None else []
     personas_viajes = personas[personas["PLACA"].isin(placas_viajes)]
 
-    buses_baja = cruce[cruce["% OCUP. REAL"].round(0) < umbral].copy()
+    if req.buses_seleccionados:
+        cruce_filtrado = cruce[cruce["BUS"].isin(req.buses_seleccionados)]
+        buses_baja = cruce_filtrado.copy()
+    else:
+        buses_baja = cruce[cruce["% OCUP. REAL"].round(0) < umbral].copy()
     buses_con_espacio = cruce[cruce["ASIENTOS_VACIOS"] > 0].copy()
 
     if buses_baja.empty:
@@ -1119,6 +1230,22 @@ def rebalanceo(req: RebalanceoRequest):
                     "CECO_DESTINO": "",
                 })
 
+        # Buscar bus para consolidar (misma zona o ruta, pasajeros caben en uno mayor)
+        consolidar_con = None
+        pas_baja = int(bus_b["PAS_REAL"])
+        for _, bc in buses_con_espacio.iterrows():
+            if bc["BUS"] == placa_baja:
+                continue
+            misma_z = str(bc["ZONA_PROCEDENCIA"]).upper().strip() == str(zona_baja).upper().strip() and str(zona_baja).strip() != ""
+            misma_r = _origen_ruta(str(bc["RUTA"])) == origen_baja and origen_baja != ""
+            if not (misma_z or misma_r):
+                continue
+            pas_otro = int(bc.get("PAS_REAL", 0))
+            cap_mayor = max(int(bc["CAPACIDAD"]), cap_baja)
+            if pas_baja + pas_otro <= cap_mayor:
+                consolidar_con = str(bc["BUS"])
+                break
+
         recomendaciones.append({
             "placa": placa_baja,
             "ruta": str(_safe(ruta_baja, "")),
@@ -1131,12 +1258,14 @@ def rebalanceo(req: RebalanceoRequest):
             "tarifa": round(float(_safe(bus_b["TARIFA"], 0)), 2),
             "costo_pasajero": round(float(_safe(bus_b["TARIFA"], 0)) / max(int(_safe(bus_b["PAS_REAL"], 0)), 1), 2),
             "perdida": round((float(_safe(bus_b["TARIFA"], 0)) / max(int(_safe(bus_b["CAPACIDAD"], 1)), 1)) * int(_safe(bus_b["ASIENTOS_VACIOS"], 0)), 2),
+            "consolidar_con": consolidar_con,
             "asignaciones": asignaciones,
         })
 
     recomendaciones.sort(key=lambda r: r["ocup"])
     total_reasignados = sum(len([a for a in r["asignaciones"] if a["BUS_DESTINO"] != "SIN ESPACIO"]) for r in recomendaciones)
     total_sin_espacio = sum(len([a for a in r["asignaciones"] if a["BUS_DESTINO"] == "SIN ESPACIO"]) for r in recomendaciones)
+
     return {
         "recomendaciones": recomendaciones,
         "resumen": {
@@ -1145,6 +1274,196 @@ def rebalanceo(req: RebalanceoRequest):
             "sin_espacio": total_sin_espacio,
             "perdida_total": round(sum(r.get("perdida", 0) for r in recomendaciones), 2),
         },
+    }
+
+
+
+# ─── Ejecutados ────────────────────────────────────────────────────────────
+
+class EjecutadosRequest(BaseModel):
+    session_id: str = "default"
+    buses: list[str] = []
+    fecha: str = ""
+    empresa: str = ""
+    denominacion: str = ""
+
+
+def _ensure_ejecuciones_table():
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ejecuciones_rebalanceo (
+            id SERIAL PRIMARY KEY,
+            fecha DATE NOT NULL,
+            bus VARCHAR(20) NOT NULL,
+            empresa VARCHAR(100),
+            denominacion VARCHAR(200),
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(fecha, bus, empresa)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+@app.post("/api/ejecutados")
+def set_ejecutados(req: EjecutadosRequest):
+    sess = get_session(req.session_id)
+    ejecutados = sess.get("ejecutados", set())
+    ejecutados.update(req.buses)
+    sess["ejecutados"] = ejecutados
+    if req.fecha and req.buses:
+        _ensure_ejecuciones_table()
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        from psycopg2.extras import execute_values
+        values = [(req.fecha, b.strip().upper(), req.empresa, req.denominacion) for b in req.buses]
+        execute_values(cur, """
+            INSERT INTO ejecuciones_rebalanceo (fecha, bus, empresa, denominacion)
+            VALUES %s ON CONFLICT (fecha, bus, empresa) DO NOTHING
+        """, values)
+        conn.commit()
+        conn.close()
+    return {"status": "ok", "ejecutados": list(ejecutados)}
+
+@app.delete("/api/ejecutados")
+def remove_ejecutados(req: EjecutadosRequest):
+    sess = get_session(req.session_id)
+    ejecutados = sess.get("ejecutados", set())
+    ejecutados -= set(req.buses)
+    sess["ejecutados"] = ejecutados
+    if req.fecha and req.buses:
+        _ensure_ejecuciones_table()
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        placeholders = ",".join(["%s"] * len(req.buses))
+        cur.execute(f"""
+            DELETE FROM ejecuciones_rebalanceo
+            WHERE fecha = %s AND bus IN ({placeholders})
+        """, [req.fecha] + [b.strip().upper() for b in req.buses])
+        conn.commit()
+        conn.close()
+    return {"status": "ok", "ejecutados": list(ejecutados)}
+
+@app.get("/api/ejecutados")
+def get_ejecutados(session_id: str = Query("default"), fecha: str = Query("")):
+    sess = get_session(session_id)
+    result = {"ejecutados": list(sess.get("ejecutados", set()))}
+    if fecha:
+        _ensure_ejecuciones_table()
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT bus FROM ejecuciones_rebalanceo WHERE fecha = %s", (fecha,))
+        result["ejecutados_db"] = [r[0] for r in cur.fetchall()]
+        conn.close()
+    return result
+
+
+# ─── Unificaciones ─────────────────────────────────────────────────────────
+
+def _ensure_unificaciones_table():
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS unificaciones_rebalanceo (
+            id SERIAL PRIMARY KEY,
+            fecha DATE NOT NULL,
+            empresa VARCHAR(100),
+            denominacion VARCHAR(200),
+            buses_origen TEXT NOT NULL,
+            placa_destino VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+class UnificacionRequest(BaseModel):
+    fecha: str
+    empresa: str = ""
+    denominacion: str = ""
+    buses_origen: list[str] = []
+    placa_destino: str = ""
+
+
+@app.post("/api/unificaciones")
+def crear_unificacion(req: UnificacionRequest):
+    _ensure_unificaciones_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    buses_str = ",".join([b.strip().upper() for b in req.buses_origen])
+    cur.execute("""
+        INSERT INTO unificaciones_rebalanceo (fecha, empresa, denominacion, buses_origen, placa_destino)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (req.fecha, req.empresa, req.denominacion, buses_str, req.placa_destino.strip().upper()))
+    # Also save to ejecuciones_rebalanceo for comparativa
+    _ensure_ejecuciones_table()
+    from psycopg2.extras import execute_values
+    values = [(req.fecha, b.strip().upper(), req.empresa, req.denominacion) for b in req.buses_origen]
+    execute_values(cur, """
+        INSERT INTO ejecuciones_rebalanceo (fecha, bus, empresa, denominacion)
+        VALUES %s ON CONFLICT (fecha, bus, empresa) DO NOTHING
+    """, values)
+    conn.commit()
+    # Return updated list
+    cur.execute("""
+        SELECT id, fecha, buses_origen, placa_destino FROM unificaciones_rebalanceo
+        WHERE fecha = %s ORDER BY created_at
+    """, (req.fecha,))
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "status": "ok",
+        "unificaciones": [{"id": r[0], "fecha": str(r[1]), "buses_origen": r[2].split(","), "placa_destino": r[3]} for r in rows]
+    }
+
+
+@app.get("/api/unificaciones")
+def listar_unificaciones(fecha: str = Query(""), empresa: str = Query("")):
+    _ensure_unificaciones_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, fecha, buses_origen, placa_destino FROM unificaciones_rebalanceo
+        WHERE fecha = %s ORDER BY created_at
+    """, (fecha,))
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "unificaciones": [{"id": r[0], "fecha": str(r[1]), "buses_origen": r[2].split(","), "placa_destino": r[3]} for r in rows]
+    }
+
+
+@app.delete("/api/unificaciones/{unif_id}")
+def eliminar_unificacion(unif_id: int):
+    _ensure_unificaciones_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    # Get the unificacion to remove its ejecuciones too
+    cur.execute("SELECT fecha, empresa, buses_origen FROM unificaciones_rebalanceo WHERE id = %s", (unif_id,))
+    row = cur.fetchone()
+    if row:
+        fecha, empresa, buses_str = row
+        buses = [b.strip() for b in buses_str.split(",")]
+        placeholders = ",".join(["%s"] * len(buses))
+        cur.execute(f"DELETE FROM ejecuciones_rebalanceo WHERE fecha = %s AND bus IN ({placeholders})",
+                    [fecha] + buses)
+    cur.execute("DELETE FROM unificaciones_rebalanceo WHERE id = %s", (unif_id,))
+    conn.commit()
+    # Return remaining
+    if row:
+        cur.execute("""
+            SELECT id, fecha, buses_origen, placa_destino FROM unificaciones_rebalanceo
+            WHERE fecha = %s ORDER BY created_at
+        """, (fecha,))
+    else:
+        cur.execute("SELECT id, fecha, buses_origen, placa_destino FROM unificaciones_rebalanceo WHERE 1=0")
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "status": "ok",
+        "unificaciones": [{"id": r[0], "fecha": str(r[1]), "buses_origen": r[2].split(","), "placa_destino": r[3]} for r in rows]
     }
 
 
@@ -1277,6 +1596,374 @@ def get_paraderos():
         return result
 
     raise HTTPException(status_code=404, detail="paradas_coords.json not found. Run: python geocode_paradas.py")
+
+
+# ─── Comparativa Diaria ────────────────────────────────────────────────────
+
+@app.get("/api/comparativa")
+def comparativa(fecha: str = Query(""), empresa: str = Query(""), denominacion: str = Query("")):
+    """Compare two consecutive days (fecha vs day before) to show improvement."""
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+
+        if not fecha:
+            cur.execute('SELECT MAX("FECHA") FROM rpt_controlbus_asistencia')
+            row = cur.fetchone()
+            if not row or not row[0]:
+                conn.close()
+                return {"error": "No hay datos"}
+            fecha = str(row[0])
+
+        cur.execute(f"""
+            SELECT DISTINCT "FECHA" FROM rpt_controlbus_asistencia
+            WHERE "FECHA" <= '{fecha}'
+            ORDER BY "FECHA" DESC LIMIT 2
+        """)
+        fechas_rows = cur.fetchall()
+        if len(fechas_rows) < 2:
+            conn.close()
+            return {"error": "No hay datos del día anterior para comparar", "fecha_actual": fecha}
+
+        fecha_hoy = str(fechas_rows[0][0])
+        fecha_ayer = str(fechas_rows[1][0])
+
+        emp_where = f""" AND "EMPRESA" = '{empresa}'""" if empresa else ""
+
+        def _stats_for_date(f):
+            q = f"""
+                SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "ZONA PROCEDENCIA", "DENOMINACION CECO"
+                FROM (
+                    SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "ZONA PROCEDENCIA", "DENOMINACION CECO"
+                    FROM rpt_controlbus_viajes_aq1
+                    UNION ALL
+                    SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "ZONA PROCEDENCIA", "DENOMINACION CECO"
+                    FROM rpt_controlbus_viajes_aq2
+                ) v
+                WHERE "FECHA" = '{f}'{emp_where}
+            """
+            df = pd.read_sql(q, conn)
+            df["NRO. PAS. IDA"] = pd.to_numeric(df["NRO. PAS. IDA"], errors="coerce").fillna(0).astype(int)
+            df["CAPACIDAD"] = pd.to_numeric(df["CAPACIDAD"], errors="coerce").fillna(0).astype(int)
+            df["TARIFA"] = pd.to_numeric(df["TARIFA"], errors="coerce").fillna(0)
+            mask = df["NRO. PAS. IDA"] != 0
+            if denominacion:
+                mask = mask & (df["DENOMINACION CECO"].astype(str).str.strip().str.upper() == denominacion.strip().upper())
+            df = df[mask].copy()
+
+            by_bus = df.groupby("BUS").agg(
+                CAPACIDAD=("CAPACIDAD", "first"),
+                PAS=("NRO. PAS. IDA", "sum"),
+                TARIFA=("TARIFA", "sum"),
+            ).reset_index()
+            by_bus["VACIOS"] = (by_bus["CAPACIDAD"] - by_bus["PAS"]).clip(lower=0)
+            by_bus["PERDIDA"] = by_bus.apply(
+                lambda r: round((r["TARIFA"] / max(r["CAPACIDAD"], 1)) * r["VACIOS"], 2), axis=1
+            )
+
+            buses = len(by_bus)
+            cap = int(by_bus["CAPACIDAD"].sum())
+            pas = int(by_bus["PAS"].sum())
+            tarifa = round(float(by_bus["TARIFA"].sum()), 2)
+            perdida = round(float(by_bus["PERDIDA"].sum()), 2)
+            ocup = round(pas / max(cap, 1) * 100, 1)
+            costo_pp = round(tarifa / max(pas, 1), 2)
+
+            return {
+                "fecha": f,
+                "buses": buses,
+                "capacidad": cap,
+                "pasajeros": pas,
+                "tarifa": tarifa,
+                "perdida": perdida,
+                "ocupacion": ocup,
+                "costo_por_persona": costo_pp,
+                "asientos_vacios": int(by_bus["VACIOS"].sum()),
+            }
+
+        hoy = _stats_for_date(fecha_hoy)
+        ayer = _stats_for_date(fecha_ayer)
+
+        def _delta(key):
+            h = hoy.get(key, 0)
+            a = ayer.get(key, 0)
+            diff = round(h - a, 2)
+            pct = round((diff / a * 100), 1) if a != 0 else 0
+            return {"valor": diff, "pct": pct}
+
+        mejoras = {
+            "ocupacion": _delta("ocupacion"),
+            "perdida": _delta("perdida"),
+            "costo_por_persona": _delta("costo_por_persona"),
+            "buses": _delta("buses"),
+            "pasajeros": _delta("pasajeros"),
+            "asientos_vacios": _delta("asientos_vacios"),
+            "tarifa": _delta("tarifa"),
+        }
+
+        cur.execute("""
+            SELECT DISTINCT "FECHA" FROM rpt_controlbus_asistencia
+            WHERE "FECHA" >= CURRENT_DATE - INTERVAL '30 days'
+            ORDER BY "FECHA" DESC
+        """)
+        fechas_disponibles = [r[0].isoformat() if hasattr(r[0], 'isoformat') else str(r[0]) for r in cur.fetchall() if r[0]]
+
+        conn.close()
+        return {
+            "hoy": hoy,
+            "ayer": ayer,
+            "mejoras": mejoras,
+            "fechas_disponibles": fechas_disponibles,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ComparativaEjecucionRequest(BaseModel):
+    fecha: str
+    buses: list[str] = []
+    empresa: str = ""
+    denominacion: str = ""
+
+
+@app.post("/api/comparativa/ejecucion")
+def comparativa_ejecucion(req: ComparativaEjecucionRequest):
+    """Compare specific rebalanced buses between execution date and next day."""
+    try:
+        conn = _get_db_conn()
+        cur = conn.cursor()
+
+        fecha_ejec = req.fecha
+        # Find next available date after execution
+        cur.execute(f"""
+            SELECT DISTINCT "FECHA" FROM rpt_controlbus_asistencia
+            WHERE "FECHA" > '{fecha_ejec}'
+            ORDER BY "FECHA" ASC LIMIT 1
+        """)
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return {"error": "No hay datos del día siguiente para comparar"}
+        fecha_sig = str(row[0])
+
+        emp_where = ""
+
+        _ensure_ejecuciones_table()
+        def _get_ejecutados_fecha(f):
+            cur.execute("""
+                SELECT bus FROM ejecuciones_rebalanceo
+                WHERE fecha = %s
+            """, (f,))
+            return {r[0] for r in cur.fetchall()}
+
+        ejecutados_dia_ejec = _get_ejecutados_fecha(fecha_ejec)
+        ejecutados_dia_sig = _get_ejecutados_fecha(fecha_sig)
+
+        def _bus_stats(f, ejecutados_set=None):
+            q = f"""
+                SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "ZONA PROCEDENCIA", "DENOMINACION CECO"
+                FROM (
+                    SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "ZONA PROCEDENCIA", "DENOMINACION CECO", "FECHA", "EMPRESA"
+                    FROM rpt_controlbus_viajes_aq1
+                    UNION ALL
+                    SELECT "BUS", "CAPACIDAD", "NRO. PAS. IDA", "TARIFA", "ZONA PROCEDENCIA", "DENOMINACION CECO", "FECHA", "EMPRESA"
+                    FROM rpt_controlbus_viajes_aq2
+                ) v
+                WHERE "FECHA" = '{f}'{emp_where}
+            """
+            df = pd.read_sql(q, conn)
+            df["BUS"] = df["BUS"].astype(str).str.strip().str.upper()
+            df["NRO. PAS. IDA"] = pd.to_numeric(df["NRO. PAS. IDA"], errors="coerce").fillna(0).astype(int)
+            df["CAPACIDAD"] = pd.to_numeric(df["CAPACIDAD"], errors="coerce").fillna(0).astype(int)
+            df["TARIFA"] = pd.to_numeric(df["TARIFA"], errors="coerce").fillna(0)
+            mask = df["NRO. PAS. IDA"] != 0
+            if req.denominacion:
+                mask = mask & (df["DENOMINACION CECO"].astype(str).str.strip().str.upper() == req.denominacion.strip().upper())
+            df = df[mask].copy()
+
+            by_bus = df.groupby("BUS").agg(
+                CAPACIDAD=("CAPACIDAD", "first"),
+                PAS=("NRO. PAS. IDA", "sum"),
+                TARIFA=("TARIFA", "sum"),
+                ZONA=("ZONA PROCEDENCIA", "first"),
+            ).reset_index()
+            by_bus["VACIOS"] = (by_bus["CAPACIDAD"] - by_bus["PAS"]).clip(lower=0)
+            by_bus["OCUP"] = (by_bus["PAS"] / by_bus["CAPACIDAD"].clip(lower=1) * 100).round(1)
+            by_bus["PERDIDA"] = by_bus.apply(
+                lambda r: round((r["TARIFA"] / max(r["CAPACIDAD"], 1)) * r["VACIOS"], 2), axis=1
+            )
+            by_bus["COSTO_PP"] = (by_bus["TARIFA"] / by_bus["PAS"].clip(lower=1)).round(2)
+            if ejecutados_set:
+                by_bus["EJECUTADO"] = by_bus["BUS"].isin(ejecutados_set)
+            else:
+                by_bus["EJECUTADO"] = False
+
+            buses_detail = by_bus.to_dict(orient="records")
+            cap = int(by_bus["CAPACIDAD"].sum())
+            pas = int(by_bus["PAS"].sum())
+            tarifa = round(float(by_bus["TARIFA"].sum()), 2)
+            perdida = round(float(by_bus["PERDIDA"].sum()), 2)
+            ocup = round(pas / max(cap, 1) * 100, 1)
+
+            ejecutados_count = int(by_bus["EJECUTADO"].sum()) if "EJECUTADO" in by_bus.columns else 0
+
+            return {
+                "fecha": f,
+                "buses_total": len(by_bus),
+                "buses_ejecutados": ejecutados_count,
+                "capacidad": cap,
+                "pasajeros": pas,
+                "tarifa": tarifa,
+                "perdida": perdida,
+                "ocupacion": ocup,
+                "costo_por_persona": round(tarifa / max(pas, 1), 2),
+                "vacios": int(by_bus["VACIOS"].sum()),
+                "buses_detail": buses_detail,
+            }
+
+        dia_ejec = _bus_stats(fecha_ejec, ejecutados_dia_ejec)
+        dia_sig = _bus_stats(fecha_sig, ejecutados_dia_sig)
+
+        def _delta(key):
+            h = dia_sig.get(key, 0)
+            a = dia_ejec.get(key, 0)
+            diff = round(h - a, 2)
+            pct = round((diff / a * 100), 1) if a != 0 else 0
+            return {"valor": diff, "pct": pct}
+
+        mejoras = {
+            "ocupacion": _delta("ocupacion"),
+            "perdida": _delta("perdida"),
+            "costo_por_persona": _delta("costo_por_persona"),
+            "pasajeros": _delta("pasajeros"),
+            "vacios": _delta("vacios"),
+        }
+
+        conn.close()
+        return {
+            "dia_ejecucion": dia_ejec,
+            "dia_siguiente": dia_sig,
+            "mejoras": mejoras,
+            "buses_consultados": [],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Reporte de Ahorros Semanal ───────────────────────────────────────────
+
+class AhorroSemanalRequest(BaseModel):
+    fecha_inicio: str  # Monday of the week
+    denominacion: str = ""
+
+@app.post("/api/ahorros/semanal")
+def ahorros_semanal(req: AhorroSemanalRequest):
+    try:
+        from datetime import datetime, timedelta
+        lunes = datetime.strptime(req.fecha_inicio, "%Y-%m-%d").date()
+        dias_semana = [(lunes + timedelta(days=i)) for i in range(5)]
+
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        _ensure_ejecuciones_table()
+
+        def _get_tarifa_bus(fecha_str, bus):
+            q = f"""
+                SELECT SUM("TARIFA"::numeric) FROM (
+                    SELECT "TARIFA", "BUS", "FECHA" FROM rpt_controlbus_viajes_aq1
+                    UNION ALL
+                    SELECT "TARIFA", "BUS", "FECHA" FROM rpt_controlbus_viajes_aq2
+                ) v WHERE "FECHA" = '{fecha_str}' AND UPPER(TRIM("BUS")) = '{bus}'
+            """
+            cur.execute(q)
+            row = cur.fetchone()
+            return float(row[0]) if row and row[0] else 0
+
+        resultado_dias = []
+        ahorro_acumulado = 0
+        acciones_activas = []  # actions that keep generating savings
+
+        for dia in dias_semana:
+            dia_str = dia.strftime("%Y-%m-%d")
+            dia_sig = (dia + timedelta(days=1)).strftime("%Y-%m-%d")
+
+            # Get new ejecutados (bajas) for this day
+            cur.execute("""
+                SELECT bus FROM ejecuciones_rebalanceo WHERE fecha = %s
+            """, (dia_str,))
+            ejecutados_dia = [r[0] for r in cur.fetchall()]
+
+            # Get unificaciones for this day
+            cur.execute("""
+                SELECT buses_origen, placa_destino FROM unificaciones_rebalanceo WHERE fecha = %s
+            """, (dia_str,))
+            unificaciones_dia = [{"buses_origen": r[0].split(","), "placa_destino": r[1]} for r in cur.fetchall()]
+
+            # Buses that are unificados (part of a unification)
+            buses_unificados = set()
+            for u in unificaciones_dia:
+                buses_unificados.update(b.strip().upper() for b in u["buses_origen"])
+
+            # Bajas puras (ejecutados que NO son parte de unificacion)
+            bajas_puras = [b for b in ejecutados_dia if b not in buses_unificados]
+
+            detalle_dia = []
+
+            # Calculate savings from bajas
+            for bus in bajas_puras:
+                tarifa = _get_tarifa_bus(dia_str, bus)
+                if tarifa > 0:
+                    detalle_dia.append({
+                        "tipo": "baja",
+                        "bus": bus,
+                        "tarifa_original": round(tarifa, 2),
+                        "tarifa_nueva": 0,
+                        "ahorro": round(tarifa, 2),
+                    })
+                    acciones_activas.append({"tipo": "baja", "bus": bus, "ahorro_diario": round(tarifa, 2), "desde": dia_str})
+
+            # Calculate savings from unificaciones
+            for u in unificaciones_dia:
+                tarifa_origen = sum(_get_tarifa_bus(dia_str, b.strip().upper()) for b in u["buses_origen"])
+                tarifa_destino = _get_tarifa_bus(dia_sig, u["placa_destino"])
+                if tarifa_destino == 0:
+                    tarifa_destino = _get_tarifa_bus(dia_str, u["placa_destino"])
+                ahorro = tarifa_origen - tarifa_destino
+                detalle_dia.append({
+                    "tipo": "unificacion",
+                    "buses_origen": [b.strip().upper() for b in u["buses_origen"]],
+                    "placa_destino": u["placa_destino"],
+                    "tarifa_original": round(tarifa_origen, 2),
+                    "tarifa_nueva": round(tarifa_destino, 2),
+                    "ahorro": round(ahorro, 2),
+                })
+                acciones_activas.append({"tipo": "unificacion", "buses": [b.strip().upper() for b in u["buses_origen"]], "placa_destino": u["placa_destino"], "ahorro_diario": round(ahorro, 2), "desde": dia_str})
+
+            # Accumulated savings from previous days' actions still active
+            ahorro_previo = sum(a["ahorro_diario"] for a in acciones_activas if a["desde"] < dia_str)
+            ahorro_nuevo = sum(d["ahorro"] for d in detalle_dia)
+            ahorro_dia_total = ahorro_previo + ahorro_nuevo
+            ahorro_acumulado += ahorro_dia_total
+
+            resultado_dias.append({
+                "fecha": dia_str,
+                "dia": ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"][dia.weekday()],
+                "nuevas_acciones": detalle_dia,
+                "ahorro_previo": round(ahorro_previo, 2),
+                "ahorro_nuevo": round(ahorro_nuevo, 2),
+                "ahorro_dia": round(ahorro_dia_total, 2),
+                "ahorro_acumulado": round(ahorro_acumulado, 2),
+            })
+
+        conn.close()
+        return {
+            "semana": req.fecha_inicio,
+            "dias": resultado_dias,
+            "ahorro_total_semanal": round(ahorro_acumulado, 2),
+            "total_acciones": len(acciones_activas),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/debug/columns")
@@ -1501,3 +2188,135 @@ def facilito_data(
     if producto:
         data = [r for r in data if r.get("producto", "").upper() == producto.upper()]
     return {"rows": data, "total": len(data)}
+
+
+# ---------------------------------------------------------------------------
+# BAJAS (personal cesado) — tabla + endpoints
+# ---------------------------------------------------------------------------
+
+def _ensure_bajas_table():
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS bajas_personal (
+            id SERIAL PRIMARY KEY,
+            fecha_ingreso DATE,
+            fecha_cese DATE,
+            idcodigogeneral VARCHAR(20),
+            idplanilla VARCHAR(10),
+            apellido_paterno VARCHAR(100),
+            apellido_materno VARCHAR(100),
+            nombres VARCHAR(100),
+            empresa VARCHAR(100),
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_bajas_fecha_cese ON bajas_personal(fecha_cese)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_bajas_idcodigo ON bajas_personal(idcodigogeneral)
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+@app.post("/api/bajas/upload")
+async def upload_bajas(file: UploadFile = File(...), empresa: str = Form("")):
+    _ensure_bajas_table()
+    content = await file.read()
+    df = pd.read_excel(io.BytesIO(content))
+    df.columns = df.columns.str.strip().str.upper()
+
+    col_map = {}
+    for c in df.columns:
+        cl = c.lower()
+        if "fecha" in cl and "ingreso" in cl:
+            col_map["fecha_ingreso"] = c
+        elif "fecha" in cl and "cese" in cl:
+            col_map["fecha_cese"] = c
+        elif "idcodigogeneral" in cl or ("codigo" in cl and "general" in cl):
+            col_map["idcodigogeneral"] = c
+        elif "idplanilla" in cl or "planilla" in cl:
+            col_map["idplanilla"] = c
+        elif "paterno" in cl:
+            col_map["apellido_paterno"] = c
+        elif "materno" in cl:
+            col_map["apellido_materno"] = c
+        elif "nombre" in cl:
+            col_map["nombres"] = c
+
+    if "fecha_cese" not in col_map or "idcodigogeneral" not in col_map:
+        raise HTTPException(status_code=422, detail=f"Excel debe tener columnas FECHA_CESE e IDCODIGOGENERAL. Columnas encontradas: {list(df.columns)}")
+
+    conn = _get_db_conn()
+    cur = conn.cursor()
+
+    # Limpiar registros previos de esta empresa
+    if empresa:
+        cur.execute("DELETE FROM bajas_personal WHERE empresa = %s", (empresa,))
+
+    # Preparar datos en batch
+    rows_to_insert = []
+    for _, row in df.iterrows():
+        fecha_cese = row.get(col_map.get("fecha_cese"))
+        idcodigo = str(row.get(col_map.get("idcodigogeneral"), "")).strip()
+        if pd.isna(fecha_cese) or not idcodigo:
+            continue
+        fecha_ingreso = row.get(col_map.get("fecha_ingreso")) if "fecha_ingreso" in col_map else None
+        if pd.notna(fecha_ingreso):
+            fecha_ingreso = str(fecha_ingreso)[:10] if not isinstance(fecha_ingreso, str) else fecha_ingreso
+        else:
+            fecha_ingreso = None
+        fecha_cese_val = str(fecha_cese)[:10] if not isinstance(fecha_cese, str) else fecha_cese
+
+        def safe_str(key):
+            if key not in col_map:
+                return ""
+            v = row.get(col_map[key], "")
+            return str(v).strip() if pd.notna(v) else ""
+
+        rows_to_insert.append((
+            fecha_ingreso, fecha_cese_val, idcodigo,
+            safe_str("idplanilla"), safe_str("apellido_paterno"),
+            safe_str("apellido_materno"), safe_str("nombres"), empresa,
+        ))
+
+    # Insert batch
+    if rows_to_insert:
+        from psycopg2.extras import execute_values
+        execute_values(cur, """
+            INSERT INTO bajas_personal (fecha_ingreso, fecha_cese, idcodigogeneral, idplanilla, apellido_paterno, apellido_materno, nombres, empresa)
+            VALUES %s
+        """, rows_to_insert)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"status": "ok", "inserted": len(rows_to_insert), "filename": file.filename}
+
+
+@app.get("/api/bajas")
+def get_bajas(fecha: str = Query("")):
+    _ensure_bajas_table()
+    conn = _get_db_conn()
+    query = "SELECT idcodigogeneral, fecha_cese, apellido_paterno, apellido_materno, nombres, empresa FROM bajas_personal"
+    if fecha:
+        query += f" WHERE fecha_cese <= '{fecha}'"
+    query += " ORDER BY fecha_cese DESC"
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return {"rows": df.to_dict(orient="records"), "total": len(df)}
+
+
+@app.get("/api/bajas/count")
+def count_bajas():
+    _ensure_bajas_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM bajas_personal")
+    count = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return {"count": count}

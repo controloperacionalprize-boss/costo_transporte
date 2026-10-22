@@ -106,8 +106,47 @@ function formatNum(n) {
   return num.toLocaleString('es-PE');
 }
 
+// ─── MultiSelect Dropdown ─────────────────────────────────────────────────
+function MultiSelectFilter({ label, options, selected, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+  const toggle = val => {
+    onChange(selected.includes(val) ? selected.filter(v => v !== val) : [...selected, val]);
+  };
+  return (
+    <div ref={ref} style={{ position: 'relative', minWidth: 150 }}>
+      <button onClick={() => setOpen(!open)} style={{ width: '100%', padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-card, #fff)', color: 'var(--text, #1f2937)', fontSize: 13, cursor: 'pointer', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selected.length === 0 ? label : `${selected.length} seleccionado${selected.length > 1 ? 's' : ''}`}
+        </span>
+        <i className={`fa-solid fa-chevron-${open ? 'up' : 'down'}`} style={{ fontSize: 10, marginLeft: 6, color: 'var(--text-dim)' }} />
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--bg-card, #fff)', border: '1px solid var(--border, #d1d5db)', borderRadius: 6, marginTop: 2, maxHeight: 220, overflowY: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+          {selected.length > 0 && (
+            <div onClick={() => onChange([])} style={{ padding: '6px 10px', fontSize: 12, color: '#ef4444', cursor: 'pointer', borderBottom: '1px solid var(--border, #e5e7eb)', fontWeight: 600 }}>
+              <i className="fa-solid fa-xmark" style={{ marginRight: 4 }} />Limpiar
+            </div>
+          )}
+          {options.map(opt => (
+            <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', fontSize: 12, cursor: 'pointer', background: selected.includes(opt) ? '#eff6ff' : 'transparent' }}>
+              <input type="checkbox" checked={selected.includes(opt)} onChange={() => toggle(opt)} style={{ accentColor: '#3b82f6' }} />
+              {opt}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Sidebar ───────────────────────────────────────────────────────────────
-function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab, empresa }) {
+function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab, empresa, bajasCount, bajasUploading, bajasMsg, uploadBajas }) {
   const [dbLoading, setDbLoading] = useState(false);
   const [dbProgress, setDbProgress] = useState(null);
 
@@ -152,7 +191,7 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
             setDbProgress(null);
             const s = await api(`/api/db/status?session_id=${SESSION_ID}`);
             setDbStatus(s);
-            if (s.viajes_loaded && s.asistencia_loaded) onDataLoaded();
+            if (s.viajes_loaded && s.asistencia_loaded) onDataLoaded(s);
             if (p.errors?.length) alert('Errores BD: ' + p.errors.join('\n'));
           }
         } catch {}
@@ -184,6 +223,12 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
         <button className={`sidebar-nav-item ${activeTab === 'indicadores' ? 'active' : ''}`} onClick={() => setActiveTab('indicadores')}>
           <span className="nav-icon"><i className="fa-solid fa-chart-line" /></span> Indicadores
         </button>
+        <button className={`sidebar-nav-item ${activeTab === 'comparativa' ? 'active' : ''}`} onClick={() => setActiveTab('comparativa')}>
+          <span className="nav-icon"><i className="fa-solid fa-arrows-left-right" /></span> Comparativa
+        </button>
+        <button className={`sidebar-nav-item ${activeTab === 'bajas' ? 'active' : ''}`} onClick={() => setActiveTab('bajas')}>
+          <span className="nav-icon"><i className="fa-solid fa-user-minus" /></span> Bajas {bajasCount > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, marginLeft: 6 }}>{bajasCount}</span>}
+        </button>
       </nav>
 
       <div className="sidebar-section">
@@ -198,7 +243,7 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
               const monthName = d.toLocaleDateString('es-PE', { month: 'short' });
               const isSelected = fecha === f;
               return (
-                <button key={f} onClick={() => { setFecha(f); loadFromDB({ fecha: f }); }} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 8, border: isSelected ? '1.5px solid #3b82f6' : '1px solid transparent', background: isSelected ? '#3b82f620' : 'rgba(255,255,255,0.05)', color: isSelected ? '#60a5fa' : 'var(--sidebar-text, #cbd5e1)', cursor: 'pointer', transition: 'all .15s', fontSize: 12, textAlign: 'left' }}>
+                <button key={f} onClick={() => { setFecha(f); }} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 8, border: isSelected ? '1.5px solid #3b82f6' : '1px solid transparent', background: isSelected ? '#3b82f620' : 'rgba(255,255,255,0.05)', color: isSelected ? '#60a5fa' : 'var(--sidebar-text, #cbd5e1)', cursor: 'pointer', transition: 'all .15s', fontSize: 12, textAlign: 'left' }}>
                   <span style={{ fontWeight: 700, fontSize: 16, minWidth: 24, textAlign: 'center' }}>{dayNum}</span>
                   <span style={{ textTransform: 'capitalize', fontSize: 11, opacity: 0.7 }}>{dayName}, {monthName}</span>
                   {isSelected && <i className="fa-solid fa-check" style={{ marginLeft: 'auto', fontSize: 10 }} />}
@@ -830,9 +875,9 @@ export default function App() {
   const [personas, setPersonas] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [filters, setFilters] = useState({ cecos: [], zonas: [], placas: [] });
-  const [selCeco, setSelCeco] = useState('');
-  const [selZona, setSelZona] = useState('');
-  const [selPlaca, setSelPlaca] = useState('');
+  const [selCeco, setSelCeco] = useState([]);
+  const [selZona, setSelZona] = useState([]);
+  const [selPlaca, setSelPlaca] = useState([]);
   const [searchPlaca, setSearchPlaca] = useState('');
   const [detailPlaca, setDetailPlaca] = useState('');
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -840,10 +885,90 @@ export default function App() {
   const [rebalanceo, setRebalanceo] = useState(null);
   const [rebalLoading, setRebalLoading] = useState(false);
   const [rebalOpen, setRebalOpen] = useState({});
+  const [selectedBuses, setSelectedBuses] = useState(new Set());
+  const [ejecutados, setEjecutados] = useState({});
+  const [busesEjecutados, setBusesEjecutados] = useState(new Set());
+  const [busesProgramados, setBusesProgramados] = useState(new Set());
+  const [unificaciones, setUnificaciones] = useState([]);
+  const [showUnificarModal, setShowUnificarModal] = useState(false);
+  const [unificarPlaca, setUnificarPlaca] = useState('');
+  const [ahorrosSemanal, setAhorrosSemanal] = useState(null);
+  const [ahorrosLoading, setAhorrosLoading] = useState(false);
   const [rutasData, setRutasData] = useState(null);
   const [routeDistances, setRouteDistances] = useState(null);
 
   const [expandedSector, setExpandedSector] = useState(null);
+
+  const [bajasCount, setBajasCount] = useState(0);
+  const [bajasUploading, setBajasUploading] = useState(false);
+  const [bajasMsg, setBajasMsg] = useState('');
+
+  const [comparativa, setComparativa] = useState(null);
+  const [comparativaLoading, setComparativaLoading] = useState(false);
+  const [comparativaFecha, setComparativaFecha] = useState('');
+
+  const [compEjec, setCompEjec] = useState(null);
+  const [compEjecLoading, setCompEjecLoading] = useState(false);
+
+  const loadCompEjec = async () => {
+    if (!dbStatus?.fecha) return;
+    setCompEjecLoading(true);
+    try {
+      const res = await api('/api/comparativa/ejecucion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fecha: dbStatus.fecha,
+          buses: [],
+          empresa: dbStatus.empresa || '',
+          denominacion: dbStatus.denominacion || '',
+        }),
+      });
+      setCompEjec(res);
+    } catch (e) { alert('Error: ' + e.message); }
+    setCompEjecLoading(false);
+  };
+
+  const loadComparativa = async (fecha = '') => {
+    setComparativaLoading(true);
+    try {
+      const emp = dbStatus?.empresa || '';
+      const den = dbStatus?.denominacion || '';
+      const params = new URLSearchParams();
+      if (fecha) params.set('fecha', fecha);
+      if (emp) params.set('empresa', emp);
+      if (den) params.set('denominacion', den);
+      const data = await api(`/api/comparativa?${params}`);
+      setComparativa(data);
+      if (!fecha && data.hoy?.fecha) setComparativaFecha(data.hoy.fecha);
+    } catch (e) { console.error('Error comparativa:', e); }
+    setComparativaLoading(false);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'comparativa' && !comparativa) loadComparativa(comparativaFecha);
+  }, [activeTab]);
+
+  useEffect(() => {
+    api('/api/bajas/count').then(d => setBajasCount(d.count)).catch(() => {});
+  }, []);
+
+  const uploadBajas = async (file, empresa) => {
+    setBajasUploading(true);
+    setBajasMsg('');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('empresa', empresa);
+      const res = await fetch('/api/bajas/upload', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Error');
+      setBajasMsg(`${data.inserted} registros cargados de ${data.filename}`);
+      const cnt = await api('/api/bajas/count');
+      setBajasCount(cnt.count);
+    } catch (e) { setBajasMsg('Error: ' + e.message); }
+    setBajasUploading(false);
+  };
 
   const [indicadorMes, setIndicadorMes] = useState('');
   const [indicadorData, setIndicadorData] = useState(null);
@@ -959,7 +1084,7 @@ export default function App() {
     if (dbReady && viajesOk && asistOk && !processing && cruce.length === 0) runProcess();
   }, [dbReady, viajesUploaded, asistenciaUploaded, asistFromDb, viajesFromDb]);
 
-  const runProcess = async () => {
+  const runProcess = async (fechaParam) => {
     setProcessing(true);
     try {
       const res = await api('/api/process', {
@@ -973,13 +1098,15 @@ export default function App() {
       setFilters(res.filters || { cecos: [], zonas: [], placas: [] });
     } catch (e) { alert('Error procesando: ' + e.message); }
     setProcessing(false);
+    // Cargar unificaciones guardadas para esta fecha
+    setTimeout(() => loadUnificaciones(fechaParam), 100);
   };
 
   const filteredCruce = useMemo(() => {
     return cruce.filter(r => {
-      if (selCeco && r.CECO !== selCeco) return false;
-      if (selZona && r.ZONA_PROCEDENCIA !== selZona) return false;
-      if (selPlaca && r.PLACA !== selPlaca) return false;
+      if (selCeco.length > 0 && !selCeco.includes(r.CECO)) return false;
+      if (selZona.length > 0 && !selZona.includes(r.ZONA_PROCEDENCIA)) return false;
+      if (selPlaca.length > 0 && !selPlaca.includes(r.PLACA)) return false;
       if (searchPlaca && !(r.BUS || '').toUpperCase().includes(searchPlaca.toUpperCase())) return false;
       return true;
     });
@@ -992,6 +1119,7 @@ export default function App() {
       capacidad: filteredCruce.reduce((s, r) => s + (r.CAPACIDAD || 0), 0),
       pasajeros_reales: filteredCruce.reduce((s, r) => s + (r.PAS_REAL || 0), 0),
       asientos_vacios: filteredCruce.reduce((s, r) => s + (r.ASIENTOS_VACIOS || 0), 0),
+      tarifa_total: filteredCruce.reduce((s, r) => s + (r.TARIFA || 0), 0),
     };
   }, [filteredCruce, metrics]);
 
@@ -1007,9 +1135,40 @@ export default function App() {
 
   const cruceColumns = useMemo(() => {
     if (cruce.length === 0) return [];
-    const visibleCols = ['BUS', 'T_BUS', 'PROVEEDOR','CAPACIDAD', 'RUTA', 'ZONA_PROCEDENCIA', 'TARIFA', 'PAS_REAL', 'PORCENTAJE_OCUP', 'ASIENTOS_VACIOS', 'COSTO_PASAJERO', 'KM', 'COSTO_KM', 'PERDIDA'];
-    const headerNames = {'BUS':'Bus','T_BUS':'T. Bus','PROVEEDOR':'Proveedor','CAPACIDAD':'Cap.','RUTA':'Ruta','ZONA_PROCEDENCIA':'Zona','TARIFA':'Tarifa','PAS_REAL':'Pas. Real','PORCENTAJE_OCUP':'% Ocup.','ASIENTOS_VACIOS':'Vacío','COSTO_PASAJERO':'Costo/Pas','COSTO_KM':'S//Km','PERDIDA':'Pérdida'};
-    const cols = visibleCols.filter(k => k === 'COSTO_KM' || cruce[0]?.[k] !== undefined).map(k => {
+    const hasCesados = cruce.some(r => r.PAS_CESADOS > 0);
+    const visibleCols = ['BUS', 'T_BUS', 'PROVEEDOR','CAPACIDAD', 'RUTA', 'ZONA_PROCEDENCIA', 'TARIFA', 'PAS_REAL', ...(hasCesados ? ['PAS_CESADOS'] : []), 'PORCENTAJE_OCUP', 'ASIENTOS_VACIOS', 'COSTO_PASAJERO', 'KM', 'COSTO_KM', 'PERDIDA'];
+    const headerNames = {'BUS':'Bus','T_BUS':'T. Bus','PROVEEDOR':'Proveedor','CAPACIDAD':'Cap.','RUTA':'Ruta','ZONA_PROCEDENCIA':'Zona','TARIFA':'Tarifa','PAS_REAL':'Pas. Real','PAS_CESADOS':'Cesados','PORCENTAJE_OCUP':'% Ocup.','ASIENTOS_VACIOS':'Vacío','COSTO_PASAJERO':'Costo/Pas','COSTO_KM':'S//Km','PERDIDA':'Pérdida'};
+    const checkCol = {
+      headerName: '',
+      width: 50,
+      maxWidth: 50,
+      checkboxSelection: true,
+      headerCheckboxSelection: true,
+      sortable: false,
+      filter: false,
+      resizable: false,
+      pinned: 'left',
+    };
+    const estadoCol = {
+      headerName: 'Estado',
+      width: 120,
+      minWidth: 120,
+      sortable: true,
+      filter: true,
+      resizable: false,
+      valueGetter: params => {
+        const bus = params.data?.BUS;
+        if (busesEjecutados.has(bus)) return 'Ejecutado';
+        if (busesProgramados.has(bus)) return 'Programado';
+        return '';
+      },
+      cellRenderer: params => {
+        if (params.value === 'Ejecutado') return React.createElement('span', { style: { background: '#dcfce7', color: '#16a34a', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, '✓ Ejecutado');
+        if (params.value === 'Programado') return React.createElement('span', { style: { background: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, 'Programado');
+        return null;
+      },
+    };
+    const cols = [checkCol, estadoCol, ...visibleCols.filter(k => k === 'COSTO_KM' || cruce[0]?.[k] !== undefined).map(k => {
       if (k === 'KM') {
         return {
           field: 'KM',
@@ -1065,11 +1224,25 @@ export default function App() {
           return null;
         },
       };
-    });
+    })];
     return cols;
-  }, [cruce, routeDistances]);
+  }, [cruce, routeDistances, busesEjecutados, busesProgramados]);
 
   const detailColumns = useMemo(() => [
+    {
+      headerName: 'Estado', width: 90, maxWidth: 90, sortable: true,
+      valueGetter: p => p.data?.CESADO ? 'CESADO' : 'ACTIVO',
+      cellRenderer: p => {
+        const cesado = p.data?.CESADO;
+        return React.createElement('span', {
+          style: {
+            background: cesado ? '#fef2f2' : '#f0fdf4',
+            color: cesado ? '#dc2626' : '#16a34a',
+            padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+          }
+        }, cesado ? 'CESADO' : 'ACTIVO');
+      },
+    },
     { headerName: 'DNI', valueGetter: p => p.data?.['DNI PASA.'], sortable: true, filter: true, width: 120 },
     { field: 'PASAJERO', sortable: true, filter: true, flex: 1, minWidth: 200 },
     { field: 'cargo', headerName: 'Cargo', sortable: true, filter: true, width: 180 },
@@ -1085,26 +1258,126 @@ export default function App() {
         return null;
       },
     },
+    {
+      field: 'FECHA_CESE', headerName: 'F. Cese', width: 110, sortable: true,
+      valueFormatter: p => p.value ? new Date(p.value).toLocaleDateString('es-PE') : '',
+      cellStyle: p => p.value ? { color: '#dc2626', fontWeight: 600 } : null,
+    },
   ], []);
 
   const runRebalanceo = async () => {
     setRebalLoading(true);
+    setEjecutados({});
     const f = dbStatus?.fecha || '';
     const emp = dbStatus?.empresa || '';
     const den = dbStatus?.denominacion || '';
+    const buses_seleccionados = selectedBuses.size > 0 ? [...selectedBuses] : [];
     try {
       const [res, rutas] = await Promise.all([
         api('/api/rebalanceo', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: SESSION_ID, umbral, fecha: f, empresa: emp, denominacion: den }),
+          body: JSON.stringify({ session_id: SESSION_ID, umbral, fecha: f, empresa: emp, denominacion: den, buses_seleccionados }),
         }),
         api(`/api/rutas-mapa?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(emp)}&denominacion=${encodeURIComponent(den)}`),
       ]);
       setRebalanceo(res);
       setRutasData(rutas);
+      const programados = new Set((res.recomendaciones || []).map(r => r.placa));
+      setBusesProgramados(programados);
     } catch (e) { alert('Error en rebalanceo: ' + e.message); }
     setRebalLoading(false);
+  };
+
+  const guardarUnificacion = async (placaDestino) => {
+    if (selectedBuses.size === 0 || !placaDestino) return;
+    const busesOrigen = [...selectedBuses];
+    try {
+      const res = await api('/api/unificaciones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fecha: dbStatus?.fecha || '',
+          empresa: dbStatus?.empresa || '',
+          denominacion: dbStatus?.denominacion || '',
+          buses_origen: busesOrigen,
+          placa_destino: placaDestino,
+        }),
+      });
+      if (res.status === 'ok') {
+        setUnificaciones(res.unificaciones || []);
+        setBusesEjecutados(prev => {
+          const next = new Set(prev);
+          busesOrigen.forEach(b => next.add(b));
+          return next;
+        });
+        setShowUnificarModal(false);
+        setUnificarPlaca('');
+        setSelectedBuses(new Set());
+      }
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const darDeBaja = async () => {
+    if (selectedBuses.size === 0) return;
+    const buses = [...selectedBuses];
+    try {
+      await api('/api/ejecutados', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: SESSION_ID, buses, fecha: dbStatus?.fecha || '', empresa: dbStatus?.empresa || '', denominacion: dbStatus?.denominacion || '' }),
+      });
+      setBusesEjecutados(prev => {
+        const next = new Set(prev);
+        buses.forEach(b => next.add(b));
+        return next;
+      });
+      setSelectedBuses(new Set());
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const eliminarUnificacion = async (id) => {
+    try {
+      const res = await api('/api/unificaciones/' + id, { method: 'DELETE' });
+      if (res.status === 'ok') setUnificaciones(res.unificaciones || []);
+    } catch {}
+  };
+
+  const loadUnificaciones = async (fechaOverride) => {
+    const f = fechaOverride || dbStatus?.fecha;
+    if (!f) return;
+    try {
+      const [resUnif, resEjec] = await Promise.all([
+        api(`/api/unificaciones?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
+        api(`/api/ejecutados?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}`),
+      ]);
+      setUnificaciones(resUnif.unificaciones || []);
+      const ejec = new Set([
+        ...(resUnif.unificaciones || []).flatMap(u => u.buses_origen || []),
+        ...(resEjec.ejecutados_db || []),
+      ]);
+      setBusesEjecutados(ejec);
+    } catch {}
+  };
+
+  const loadAhorrosSemanal = async () => {
+    if (!dbStatus?.fecha) return;
+    setAhorrosLoading(true);
+    try {
+      const d = new Date(dbStatus.fecha + 'T12:00:00');
+      const dayOfWeek = d.getDay();
+      const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      const lunes = new Date(d);
+      lunes.setDate(d.getDate() - diff);
+      const lunesStr = lunes.toISOString().split('T')[0];
+      const res = await api('/api/ahorros/semanal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fecha_inicio: lunesStr, denominacion: dbStatus?.denominacion || '' }),
+      });
+      setAhorrosSemanal(res);
+    } catch (e) { alert('Error: ' + e.message); }
+    setAhorrosLoading(false);
   };
 
   const toggleRebal = (idx) => setRebalOpen(prev => ({ ...prev, [idx]: !prev[idx] }));
@@ -1117,9 +1390,10 @@ export default function App() {
         dbStatus={dbStatus} setDbStatus={setDbStatus}
         activeTab={activeTab} setActiveTab={setActiveTab}
         empresa={empresaName}
-        onDataLoaded={() => {
+        bajasCount={bajasCount} bajasUploading={bajasUploading} bajasMsg={bajasMsg} uploadBajas={uploadBajas}
+        onDataLoaded={(statusData) => {
           setCruce([]); setPersonas([]); setMetrics(null); setRebalanceo(null);
-          setRutasData(null); setRouteDistances(null); setDetailPlaca(''); runProcess();
+          setRutasData(null); setRouteDistances(null); setDetailPlaca(''); setUnificaciones([]); runProcess(statusData?.fecha);
         }}
       />
 
@@ -1155,6 +1429,7 @@ export default function App() {
             <MetricCard title="CAPACIDAD TOTAL" value={filteredMetrics.capacidad} color="green" icon={<i className="fa-solid fa-users" />} />
             <MetricCard title="PASAJEROS REALES" value={filteredMetrics.pasajeros_reales} color="green" icon={<i className="fa-solid fa-user-check" />} />
             <MetricCard title="ASIENTOS VACÍOS" value={filteredMetrics.asientos_vacios} color="red" icon={<i className="fa-solid fa-chair" />} />
+            <MetricCard title="PÉRDIDA PONDERADA" value={(() => { const c = filteredMetrics.capacidad || 1, t = filteredMetrics.tarifa_total || 0, v = filteredMetrics.asientos_vacios > 0 ? filteredMetrics.asientos_vacios : 0; return `S/${(t / c * v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`; })()} color="red" icon={<i className="fa-solid fa-scale-unbalanced" />} />
           </section>
         )}
 
@@ -1164,10 +1439,11 @@ export default function App() {
           filteredCruce.forEach(r => {
             const zona = (r.ZONA_PROCEDENCIA || '').toUpperCase().trim();
             const sector = ZONA_A_SECTOR[zona] || 'OTROS';
-            if (!sectorStats[sector]) { sectorStats[sector] = { buses: 0, capacidad: 0, pasajeros: 0 }; sectorBuses[sector] = []; }
+            if (!sectorStats[sector]) { sectorStats[sector] = { buses: 0, capacidad: 0, pasajeros: 0, tarifa: 0 }; sectorBuses[sector] = []; }
             sectorStats[sector].buses += 1;
             sectorStats[sector].capacidad += (r.CAPACIDAD || 0);
             sectorStats[sector].pasajeros += (r.PAS_REAL || 0);
+            sectorStats[sector].tarifa += (r.TARIFA || 0);
             const distInfo = routeDistances?.[zona] || routeDistances?.[r.ZONA_PROCEDENCIA];
             sectorBuses[sector].push({ ...r, _km: distInfo?.distancia_km || null });
           });
@@ -1176,8 +1452,31 @@ export default function App() {
             <section style={{ marginBottom: 0 }}>
               <h2 style={{ marginBottom: 12 }}><i className="fa-solid fa-layer-group" style={{ marginRight: 6 }} />Capacidad por Zona</h2>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                {(() => {
+                  const totalBuses = sectores.reduce((sum, [, s]) => sum + s.buses, 0);
+                  const totalCap = sectores.reduce((sum, [, s]) => sum + s.capacidad, 0);
+                  const totalPas = sectores.reduce((sum, [, s]) => sum + s.pasajeros, 0);
+                  const totalTarifa = sectores.reduce((sum, [, s]) => sum + s.tarifa, 0);
+                  const totalPct = totalCap > 0 ? Math.round(totalPas / totalCap * 100) : 0;
+                  const totalCostoPP = totalPas > 0 ? (totalTarifa / totalPas).toFixed(2) : '0';
+                  return (
+                    <div style={{ flex: '1 1 160px', maxWidth: 220, padding: '12px 16px', borderRadius: 10, background: 'var(--bg-card, #fff)', border: '1.5px solid #1e293b30', position: 'relative', overflow: 'hidden' }}>
+                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, background: '#e5e7eb' }}>
+                        <div style={{ height: '100%', width: `${totalPct}%`, background: '#1e293b', transition: 'width .3s' }} />
+                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#1e293b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 }}>TOTAL</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{totalPas}<span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text-dim)' }}>/{totalCap}</span></div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+                        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{totalBuses} buses</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: totalPct >= 80 ? 'var(--green)' : totalPct >= 50 ? '#ca8a04' : 'var(--red)' }}>{totalPct}%</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: '#1e293b', fontWeight: 600, marginTop: 4 }}>S/{totalCostoPP} /persona</div>
+                    </div>
+                  );
+                })()}
                 {sectores.map(([sector, s]) => {
                   const pct = s.capacidad > 0 ? Math.round(s.pasajeros / s.capacidad * 100) : 0;
+                  const costoPP = s.pasajeros > 0 ? (s.tarifa / s.pasajeros).toFixed(2) : '0';
                   const color = SECTOR_COLORS[sector] || '#6b7280';
                   const isExpanded = expandedSector === sector;
                   return (
@@ -1194,6 +1493,7 @@ export default function App() {
                         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{s.buses} buses</span>
                         <span style={{ fontSize: 13, fontWeight: 700, color: pct >= 80 ? 'var(--green)' : pct >= 50 ? '#ca8a04' : 'var(--red)' }}>{pct}%</span>
                       </div>
+                      <div style={{ fontSize: 11, color, fontWeight: 600, marginTop: 4 }}>S/{costoPP} /persona</div>
                     </div>
                   );
                 })}
@@ -1275,18 +1575,9 @@ export default function App() {
             <section>
               <h2>Cruce de Datos</h2>
               <div className="filters-row">
-                <select value={selCeco} onChange={e => setSelCeco(e.target.value)}>
-                  <option value="">Todas las CCE/Com.</option>
-                  {filters.cecos.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <select value={selZona} onChange={e => setSelZona(e.target.value)}>
-                  <option value="">Todas las Zonas</option>
-                  {filters.zonas.map(z => <option key={z} value={z}>{z}</option>)}
-                </select>
-                <select value={selPlaca} onChange={e => setSelPlaca(e.target.value)}>
-                  <option value="">Todos los Pasos</option>
-                  {filters.placas.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <MultiSelectFilter label="Todas las CCE/Com." options={filters.cecos} selected={selCeco} onChange={setSelCeco} />
+                <MultiSelectFilter label="Todas las Zonas" options={filters.zonas} selected={selZona} onChange={setSelZona} />
+                <MultiSelectFilter label="Todos los Pasos" options={filters.placas} selected={selPlaca} onChange={setSelPlaca} />
                 <input
                   type="text"
                   placeholder="Buscar por placa..."
@@ -1304,6 +1595,12 @@ export default function App() {
                   pagination
                   paginationPageSize={20}
                   animateRows
+                  rowSelection="multiple"
+                  suppressRowClickSelection
+                  onSelectionChanged={e => {
+                    const selected = e.api.getSelectedRows().map(r => r.BUS);
+                    setSelectedBuses(new Set(selected));
+                  }}
                   onRowClicked={e => {
                     const placa = e.data?.BUS;
                     if (placa) {
@@ -1315,6 +1612,32 @@ export default function App() {
                 />
               </div>
             </section>
+
+            {showUnificarModal && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowUnificarModal(false)}>
+                <div style={{ background: '#fff', borderRadius: 12, width: '90%', maxWidth: 500, padding: 24, position: 'relative' }} onClick={e => e.stopPropagation()}>
+                  <button onClick={() => setShowUnificarModal(false)} style={{ position: 'absolute', top: 12, right: 16, background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748b' }}>×</button>
+                  <h3 style={{ margin: '0 0 16px' }}><i className="fa-solid fa-compress" style={{ marginRight: 8, color: '#7c3aed' }} />Unificar Buses</h3>
+                  <p style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+                    Buses seleccionados: <b>{[...selectedBuses].join(', ')}</b>
+                  </p>
+                  <label style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'block' }}>Placa destino para el día siguiente:</label>
+                  <input
+                    type="text"
+                    value={unificarPlaca}
+                    onChange={e => setUnificarPlaca(e.target.value.toUpperCase())}
+                    placeholder="Ej: T1G-967"
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14, marginBottom: 16, fontFamily: 'var(--mono)' }}
+                  />
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <button onClick={() => setShowUnificarModal(false)} className="btn" style={{ background: '#f1f5f9', color: '#334155' }}>Cancelar</button>
+                    <button onClick={() => guardarUnificacion(unificarPlaca)} disabled={!unificarPlaca.trim()} className="btn" style={{ background: '#7c3aed', color: '#fff', border: 'none', opacity: unificarPlaca.trim() ? 1 : 0.5 }}>
+                      <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Guardar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {showDetailModal && detailPlaca && (
               <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowDetailModal(false)}>
@@ -1331,7 +1654,8 @@ export default function App() {
                       <div><b>Ruta:</b> {detailBusInfo.ZONA_PROCEDENCIA} → {detailBusInfo.CECO}</div>
                       <div><b>Capacidad:</b> {detailBusInfo.CAPACIDAD}</div>
                       <div><b>Reporte:</b> {detailBusInfo.PAS_IDA_VIAJES}</div>
-                      <div><b>Real:</b> {detailPersons.length}</div>
+                      <div><b>Real:</b> {detailPersons.filter(p => !p.CESADO).length}</div>
+                      {detailPersons.some(p => p.CESADO) && <div style={{ color: '#dc2626', fontWeight: 700 }}><b>Cesados:</b> {detailPersons.filter(p => p.CESADO).length}</div>}
                       <div><b>% Ocup:</b> {detailBusInfo.PORCENTAJE_OCUP ?? '—'}%</div>
                       <div><b>Tarifa:</b> S/{detailBusInfo.TARIFA?.toLocaleString() ?? '—'}</div>
                     </div>
@@ -1339,7 +1663,8 @@ export default function App() {
                   {detailPersons.length > 0 ? (
                     <div className="ag-theme-alpine" style={{ width: '100%' }}>
                       <AgGridReact rowData={detailPersons} columnDefs={detailColumns}
-                        defaultColDef={{ resizable: true, sortable: true }} domLayout="autoHeight" animateRows />
+                        defaultColDef={{ resizable: true, sortable: true }} domLayout="autoHeight" animateRows
+                        getRowStyle={params => params.data?.CESADO ? { background: '#fef2f2', color: '#991b1b' } : null} />
                     </div>
                   ) : (
                     <p style={{ textAlign: 'center', color: '#9ca3af', padding: 24 }}>No se encontraron personas para esta placa.</p>
@@ -1355,12 +1680,66 @@ export default function App() {
               <div className="rebal-controls">
                 <label>
                   Umbral de ocupacion:
-                  <strong>{umbral}%</strong>
-                  <input type="range" min={30} max={90} step={5} value={umbral} onChange={e => setUmbral(+e.target.value)} />
+                  <strong>0 - {umbral}%</strong>
+                  <input type="range" min={30} max={95} step={5} value={umbral} onChange={e => setUmbral(+e.target.value)} />
                 </label>
-                <button onClick={runRebalanceo} disabled={rebalLoading} className="btn btn-primary">
-                  {rebalLoading ? <><span className="spinner" style={{ marginRight: 8 }} /> Calculando...</> : 'Calcular Rebalanceo'}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  {selectedBuses.size > 0 && (
+                    <span style={{ fontSize: 13, color: '#3b82f6', fontWeight: 600 }}>
+                      <i className="fa-solid fa-check-double" style={{ marginRight: 4 }} />
+                      {selectedBuses.size} bus{selectedBuses.size > 1 ? 'es' : ''} seleccionado{selectedBuses.size > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  <button onClick={runRebalanceo} disabled={rebalLoading} className="btn btn-primary">
+                    {rebalLoading ? <><span className="spinner" style={{ marginRight: 8 }} /> Calculando...</> : selectedBuses.size > 0 ? `Rebalancear ${selectedBuses.size} bus${selectedBuses.size > 1 ? 'es' : ''}` : 'Calcular Rebalanceo'}
+                  </button>
+                  {selectedBuses.size > 0 && (
+                    <button onClick={() => setShowUnificarModal(true)} className="btn" style={{ background: '#7c3aed', color: '#fff', border: 'none' }}>
+                      <i className="fa-solid fa-compress" style={{ marginRight: 4 }} />
+                      Unificar ({selectedBuses.size})
+                    </button>
+                  )}
+                  {selectedBuses.size > 0 && (
+                    <button onClick={darDeBaja} className="btn" style={{ background: '#dc2626', color: '#fff', border: 'none' }}>
+                      <i className="fa-solid fa-ban" style={{ marginRight: 4 }} />
+                      Dar de Baja ({selectedBuses.size})
+                    </button>
+                  )}
+                </div>
+                {(busesProgramados.size > 0 || unificaciones.length > 0 || busesEjecutados.size > 0) && (
+                  <div style={{ display: 'flex', gap: 16, fontSize: 13, marginTop: 8 }}>
+                    <span style={{ color: '#f59e0b', fontWeight: 600 }}>
+                      <i className="fa-solid fa-clock" style={{ marginRight: 4 }} />
+                      Programados: {busesProgramados.size}
+                    </span>
+                    <span style={{ color: '#7c3aed', fontWeight: 600 }}>
+                      <i className="fa-solid fa-compress" style={{ marginRight: 4 }} />
+                      Unificados: {unificaciones.length}
+                    </span>
+                    {busesEjecutados.size > 0 && (
+                      <span style={{ color: '#dc2626', fontWeight: 600 }}>
+                        <i className="fa-solid fa-ban" style={{ marginRight: 4 }} />
+                        De baja: {busesEjecutados.size}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {unificaciones.length > 0 && (
+                  <div style={{ marginTop: 10, padding: 12, background: '#f5f3ff', borderRadius: 8, border: '1px solid #ddd6fe' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#7c3aed', marginBottom: 8 }}>Unificaciones guardadas:</div>
+                    {unificaciones.map(u => (
+                      <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid #ede9fe', fontSize: 12 }}>
+                        <span style={{ fontFamily: 'var(--mono)', color: '#64748b' }}>{(u.buses_origen || []).join(', ')}</span>
+                        <i className="fa-solid fa-arrow-right" style={{ color: '#7c3aed', fontSize: 10 }} />
+                        <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, color: '#7c3aed' }}>{u.placa_destino}</span>
+                        <span style={{ color: '#94a3b8', fontSize: 11 }}>(día siguiente)</span>
+                        <button onClick={() => eliminarUnificacion(u.id)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 12 }}>
+                          <i className="fa-solid fa-trash-can" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {rebalanceo?.resumen && (
@@ -1389,6 +1768,7 @@ export default function App() {
                       &nbsp;|&nbsp; Costo/Pas: S/{rec.costo_pasajero?.toFixed(2) ?? '?'}
                       &nbsp;|&nbsp; <span style={{color:'var(--red)', fontWeight:700}}>Pérdida: S/{rec.perdida?.toLocaleString() ?? '?'}</span>
                       &nbsp;|&nbsp; <span style={{color:'#059669', fontWeight:600}}>Prom. Jarras: {promJarras}</span>
+                      {rec.consolidar_con && <>&nbsp;|&nbsp; <span style={{color:'#7c3aed', fontWeight:700}}>Unir con: {rec.consolidar_con}</span></>}
                     </span>
                     <span className="rebal-occ" style={{ color: occColor(rec.ocupacion_pct ?? rec.ocup ?? 0) }}>
                       {rec.ocupacion_pct ?? rec.ocup ?? 0}%
@@ -1405,7 +1785,8 @@ export default function App() {
                               <tr><th>DNI</th><th>Pasajero</th><th>Actividad</th><th>Jarras/Sem</th><th>Bus Destino</th><th>Zona Destino</th><th>Tipo</th><th>CECO Destino</th></tr>
                             </thead>
                             <tbody>
-                              {(rec.asignaciones || rec.personas_reasignables || []).map((p, i) => (
+                              {(rec.asignaciones || rec.personas_reasignables || []).map((p, i) => {
+                                return (
                                 <tr key={i}>
                                   <td style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{p.DNI || p.dni}</td>
                                   <td>{p.PASAJERO || p.pasajero || p.nombre}</td>
@@ -1420,7 +1801,8 @@ export default function App() {
                                   </td>
                                   <td>{p.CECO_DESTINO || '-'}</td>
                                 </tr>
-                              ))}
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -1430,6 +1812,172 @@ export default function App() {
                 </div>
                 );
               })}
+
+              {rebalanceo && (
+                <div style={{ marginTop: 24, padding: 20, background: 'var(--bg-card)', borderRadius: 12, border: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <h3 style={{ margin: 0 }}><i className="fa-solid fa-scale-balanced" style={{ marginRight: 8 }} />Comparativa de Ejecución</h3>
+                    <button onClick={loadCompEjec} disabled={compEjecLoading} className="btn btn-primary" style={{ fontSize: 13 }}>
+                      {compEjecLoading ? <><span className="spinner" style={{ marginRight: 6 }} />Comparando...</> : <><i className="fa-solid fa-chart-column" style={{ marginRight: 4 }} />Comparar con día siguiente</>}
+                    </button>
+                  </div>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 12px' }}>
+                    Compara todos los buses del CECO del <b>{dbStatus?.fecha}</b> con el día siguiente para ver el ahorro general.
+                  </p>
+
+                  {compEjec && !compEjec.error && (
+                    <div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 16 }}>
+                        {[
+                          { label: 'Ocupación', key: 'ocupacion', unit: '%', good: 'up' },
+                          { label: 'Ahorro', key: 'perdida', unit: 'S/', good: 'down' },
+                          { label: 'Costo/Persona', key: 'costo_por_persona', unit: 'S/', good: 'down' },
+                          { label: 'Pasajeros', key: 'pasajeros', unit: '', good: 'up' },
+                          { label: 'Asientos vacíos', key: 'vacios', unit: '', good: 'down' },
+                        ].map(m => {
+                          const mejora = compEjec.mejoras?.[m.key];
+                          if (!mejora) return null;
+                          const isGood = m.good === 'up' ? mejora.valor > 0 : mejora.valor < 0;
+                          const isBad = m.good === 'up' ? mejora.valor < 0 : mejora.valor > 0;
+                          return (
+                            <div key={m.key} style={{ padding: 14, borderRadius: 10, background: isGood ? '#f0fdf4' : isBad ? '#fef2f2' : '#f8fafc', border: `1px solid ${isGood ? '#bbf7d0' : isBad ? '#fecaca' : '#e2e8f0'}` }}>
+                              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>{m.label}</div>
+                              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                <span style={{ fontSize: 20, fontWeight: 700, color: isGood ? '#16a34a' : isBad ? '#dc2626' : '#334155' }}>
+                                  {mejora.valor > 0 ? '+' : ''}{m.unit === 'S/' ? `S/${Math.abs(mejora.valor).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}` : mejora.valor}
+                                </span>
+                                <span style={{ fontSize: 12, color: isGood ? '#16a34a' : isBad ? '#dc2626' : '#64748b' }}>
+                                  ({mejora.pct > 0 ? '+' : ''}{mejora.pct}%)
+                                </span>
+                              </div>
+                              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                                {compEjec.dia_ejecucion?.[m.key]} → {compEjec.dia_siguiente?.[m.key]}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                        {['dia_ejecucion', 'dia_siguiente'].map(dia => {
+                          const d = compEjec[dia];
+                          if (!d) return null;
+                          return (
+                            <div key={dia} style={{ padding: 14, borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                              <h4 style={{ margin: '0 0 10px', fontSize: 13 }}>
+                                {dia === 'dia_ejecucion' ? <><i className="fa-solid fa-calendar-check" style={{ marginRight: 6 }} />Día de ejecución</> : <><i className="fa-solid fa-calendar-day" style={{ marginRight: 6 }} />Día siguiente</>}: <b>{d.fecha}</b>
+                              </h4>
+                              <div style={{ fontSize: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                                <span>Buses total: <b>{d.buses_total}</b> {d.buses_ejecutados > 0 && <span style={{ color: '#16a34a' }}>(Ejecutados: {d.buses_ejecutados})</span>}</span>
+                                <span>Ocupación: <b>{d.ocupacion}%</b></span>
+                                <span>Pasajeros: <b>{d.pasajeros}</b></span>
+                                <span>Capacidad: <b>{d.capacidad}</b></span>
+                                <span>Ahorro: <b style={{ color: '#059669' }}>S/{d.perdida?.toLocaleString()}</b></span>
+                                <span>Costo/Persona: <b>S/{d.costo_por_persona}</b></span>
+                              </div>
+                              {d.buses_detail?.length > 0 && (
+                                <details style={{ marginTop: 8 }}>
+                                  <summary style={{ cursor: 'pointer', fontSize: 12, color: '#3b82f6' }}>Ver detalle por bus ({d.buses_detail.length})</summary>
+                                  <table className="mini-table" style={{ marginTop: 6 }}>
+                                    <thead><tr><th></th><th>Bus</th><th>Cap</th><th>Pas</th><th>Ocup%</th><th>Pérdida</th><th>Costo/PP</th></tr></thead>
+                                    <tbody>
+                                      {d.buses_detail.map((b, i) => (
+                                        <tr key={i} style={b.EJECUTADO ? { background: '#f0fdf4', fontWeight: 600 } : {}}>
+                                          <td>{b.EJECUTADO ? <i className="fa-solid fa-circle-check" style={{ color: '#16a34a' }} /> : ''}</td>
+                                          <td style={{ fontFamily: 'var(--mono)' }}>{b.BUS}</td>
+                                          <td>{b.CAPACIDAD}</td>
+                                          <td>{b.PAS}</td>
+                                          <td style={{ color: b.OCUP >= 70 ? '#16a34a' : b.OCUP >= 50 ? '#f59e0b' : '#dc2626' }}>{b.OCUP}%</td>
+                                          <td style={{ color: '#dc2626' }}>S/{b.PERDIDA?.toLocaleString()}</td>
+                                          <td>S/{b.COSTO_PP}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </details>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {compEjec?.error && <div style={{ color: '#dc2626', fontSize: 13 }}>{compEjec.error}</div>}
+                </div>
+              )}
+              {/* ── Reporte de Ahorros Semanal ── */}
+              {rebalanceo && (
+                <div style={{ marginTop: 24, padding: 20, background: 'var(--bg-card)', borderRadius: 12, border: '1.5px solid #059669' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <h3 style={{ margin: 0, color: '#059669' }}><i className="fa-solid fa-piggy-bank" style={{ marginRight: 8 }} />Reporte de Ahorros Semanal</h3>
+                    <button onClick={loadAhorrosSemanal} disabled={ahorrosLoading} className="btn btn-primary" style={{ fontSize: 13, background: '#059669', border: 'none' }}>
+                      {ahorrosLoading ? <><span className="spinner" style={{ marginRight: 6 }} />Calculando...</> : <><i className="fa-solid fa-calculator" style={{ marginRight: 4 }} />Calcular Ahorros</>}
+                    </button>
+                  </div>
+
+                  {ahorrosSemanal && (
+                    <div>
+                      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                        <div style={{ flex: '1 1 150px', padding: '12px 16px', borderRadius: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', textAlign: 'center' }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#059669', textTransform: 'uppercase' }}>Ahorro Total Semanal</div>
+                          <div style={{ fontSize: 24, fontWeight: 800, color: '#059669' }}>S/{ahorrosSemanal.ahorro_total_semanal?.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</div>
+                        </div>
+                        <div style={{ flex: '1 1 150px', padding: '12px 16px', borderRadius: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', textAlign: 'center' }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#059669', textTransform: 'uppercase' }}>Acciones ejecutadas</div>
+                          <div style={{ fontSize: 24, fontWeight: 800, color: '#059669' }}>{ahorrosSemanal.total_acciones}</div>
+                        </div>
+                      </div>
+
+                      <div style={{ overflowX: 'auto' }}>
+                        <table className="mini-table" style={{ width: '100%', fontSize: 12 }}>
+                          <thead>
+                            <tr>
+                              <th>Día</th>
+                              <th>Fecha</th>
+                              <th>Nuevas Acciones</th>
+                              <th>Ahorro Nuevo</th>
+                              <th>Ahorro Previo</th>
+                              <th>Ahorro del Día</th>
+                              <th>Acumulado</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ahorrosSemanal.dias?.map((d, i) => (
+                              <tr key={i} style={d.ahorro_dia > 0 ? { background: '#f0fdf410' } : {}}>
+                                <td style={{ fontWeight: 600 }}>{d.dia}</td>
+                                <td>{d.fecha}</td>
+                                <td>
+                                  {d.nuevas_acciones?.length > 0 ? d.nuevas_acciones.map((a, j) => (
+                                    <div key={j} style={{ fontSize: 11, marginBottom: 2 }}>
+                                      {a.tipo === 'baja' ? (
+                                        <span><span style={{ color: '#dc2626', fontWeight: 600 }}>Baja:</span> {a.bus} (S/{a.tarifa_original})</span>
+                                      ) : (
+                                        <span><span style={{ color: '#7c3aed', fontWeight: 600 }}>Unif:</span> {a.buses_origen?.join(', ')} → {a.placa_destino} (S/{a.tarifa_original} → S/{a.tarifa_nueva})</span>
+                                      )}
+                                    </div>
+                                  )) : <span style={{ color: 'var(--text-dim)' }}>—</span>}
+                                </td>
+                                <td style={{ fontWeight: 600, color: d.ahorro_nuevo > 0 ? '#059669' : 'var(--text-dim)' }}>
+                                  {d.ahorro_nuevo > 0 ? `S/${d.ahorro_nuevo.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
+                                </td>
+                                <td style={{ color: d.ahorro_previo > 0 ? '#0891b2' : 'var(--text-dim)' }}>
+                                  {d.ahorro_previo > 0 ? `S/${d.ahorro_previo.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
+                                </td>
+                                <td style={{ fontWeight: 700, color: d.ahorro_dia > 0 ? '#059669' : 'var(--text-dim)' }}>
+                                  S/{d.ahorro_dia.toLocaleString(undefined, {minimumFractionDigits:2})}
+                                </td>
+                                <td style={{ fontWeight: 800, color: '#059669', fontSize: 13 }}>
+                                  S/{d.ahorro_acumulado.toLocaleString(undefined, {minimumFractionDigits:2})}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           </>;
         })()}
@@ -1636,6 +2184,155 @@ export default function App() {
           )}
             </section>
           </>
+        )}
+
+        {activeTab === 'comparativa' && (
+          <section style={{ padding: '0 8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+              <h2 style={{ margin: 0 }}><i className="fa-solid fa-arrows-left-right" style={{ marginRight: 8 }} />Comparativa Diaria</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <select value={comparativaFecha} onChange={e => { setComparativaFecha(e.target.value); loadComparativa(e.target.value); }} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>
+                  {comparativa?.fechas_disponibles?.length > 0 ? comparativa.fechas_disponibles.map(f => (
+                    <option key={f} value={f}>{new Date(f + 'T12:00:00').toLocaleDateString('es-PE', { weekday: 'short', day: 'numeric', month: 'short' })}</option>
+                  )) : <option value="">Cargando...</option>}
+                </select>
+                <button onClick={() => loadComparativa(comparativaFecha)} disabled={comparativaLoading} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                  {comparativaLoading ? <><span className="spinner" style={{ marginRight: 6 }} />Cargando...</> : <><i className="fa-solid fa-rotate-right" style={{ marginRight: 4 }} />Actualizar</>}
+                </button>
+              </div>
+            </div>
+
+            {comparativaLoading && !comparativa && (
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}><span className="spinner" style={{ marginRight: 8 }} />Cargando comparativa...</div>
+            )}
+
+            {comparativa?.error && (
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>{comparativa.error}</div>
+            )}
+
+            {comparativa?.hoy && comparativa?.ayer && (() => {
+              const h = comparativa.hoy;
+              const a = comparativa.ayer;
+              const m = comparativa.mejoras;
+              const DeltaArrow = ({ val, invertColor }) => {
+                if (val === 0) return <span style={{ color: 'var(--text-dim)', fontSize: 12 }}>—</span>;
+                const positive = invertColor ? val < 0 : val > 0;
+                return (
+                  <span style={{ color: positive ? '#16a34a' : '#ef4444', fontSize: 12, fontWeight: 700 }}>
+                    {val > 0 ? '▲' : '▼'} {Math.abs(val).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                  </span>
+                );
+              };
+              const cards = [
+                { label: 'Ocupación', hoy: `${h.ocupacion}%`, ayer: `${a.ocupacion}%`, delta: m.ocupacion.valor, pct: m.ocupacion.pct, icon: 'fa-percentage', invert: false },
+                { label: 'Buses', hoy: h.buses, ayer: a.buses, delta: m.buses.valor, pct: m.buses.pct, icon: 'fa-bus', invert: true },
+                { label: 'Pasajeros', hoy: h.pasajeros, ayer: a.pasajeros, delta: m.pasajeros.valor, pct: m.pasajeros.pct, icon: 'fa-users', invert: false },
+                { label: 'Asientos vacíos', hoy: h.asientos_vacios, ayer: a.asientos_vacios, delta: m.asientos_vacios.valor, pct: m.asientos_vacios.pct, icon: 'fa-chair', invert: true },
+                { label: 'Costo/Persona', hoy: `S/${h.costo_por_persona}`, ayer: `S/${a.costo_por_persona}`, delta: m.costo_por_persona.valor, pct: m.costo_por_persona.pct, icon: 'fa-money-bill', invert: true },
+                { label: 'Pérdida', hoy: `S/${h.perdida.toLocaleString()}`, ayer: `S/${a.perdida.toLocaleString()}`, delta: m.perdida.valor, pct: m.perdida.pct, icon: 'fa-arrow-trend-down', invert: true },
+                { label: 'Tarifa Total', hoy: `S/${h.tarifa.toLocaleString()}`, ayer: `S/${a.tarifa.toLocaleString()}`, delta: m.tarifa.valor, pct: m.tarifa.pct, icon: 'fa-receipt', invert: true },
+              ];
+              return (
+                <>
+                  <div style={{ display: 'flex', gap: 16, marginBottom: 20, fontSize: 13 }}>
+                    <div style={{ padding: '8px 16px', borderRadius: 8, background: '#eff6ff', color: '#1e40af', fontWeight: 600 }}>
+                      <i className="fa-solid fa-calendar-day" style={{ marginRight: 6 }} />
+                      Hoy: {new Date(h.fecha + 'T12:00:00').toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long' })}
+                    </div>
+                    <div style={{ padding: '8px 16px', borderRadius: 8, background: '#f5f5f4', color: '#57534e', fontWeight: 600 }}>
+                      <i className="fa-solid fa-calendar" style={{ marginRight: 6 }} />
+                      Ayer: {new Date(a.fecha + 'T12:00:00').toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long' })}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 24 }}>
+                    {cards.map(c => (
+                      <div key={c.label} style={{ padding: 16, borderRadius: 10, background: 'var(--bg-card, #fff)', border: '1px solid var(--border, #e5e7eb)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase' }}>
+                            <i className={`fa-solid ${c.icon}`} style={{ marginRight: 4 }} />{c.label}
+                          </span>
+                          <DeltaArrow val={c.delta} invertColor={c.invert} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                          <div>
+                            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{c.hoy}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>hoy</div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-dim)' }}>{c.ayer}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>anterior</div>
+                          </div>
+                        </div>
+                        {c.pct !== 0 && (
+                          <div style={{ fontSize: 11, marginTop: 6, color: (c.invert ? c.pct < 0 : c.pct > 0) ? '#16a34a' : '#ef4444', fontWeight: 600 }}>
+                            {c.pct > 0 ? '+' : ''}{c.pct}% vs día anterior
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+          </section>
+        )}
+
+        {activeTab === 'bajas' && (
+          <section style={{ padding: '0 8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+              <h2 style={{ margin: 0 }}><i className="fa-solid fa-user-minus" style={{ marginRight: 8 }} />Gestión de Bajas</h2>
+              <span style={{ background: 'var(--bg-card)', padding: '6px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600 }}>
+                {bajasCount} registros en BD
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 20 }}>
+              {['AQU ANQA SAC', 'AQU ANQA II SAC'].map(emp => (
+                <div key={emp} style={{ background: 'var(--bg-card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)' }}>
+                  <h3 style={{ margin: '0 0 12px', fontSize: 14 }}><i className="fa-solid fa-file-excel" style={{ color: '#16a34a', marginRight: 8 }} />{emp}</h3>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 12px' }}>Sube el Excel de bajas para {emp}</p>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={e => {
+                      if (e.target.files[0]) uploadBajas(e.target.files[0], emp);
+                    }}
+                    disabled={bajasUploading}
+                    style={{ fontSize: 12 }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {bajasUploading && (
+              <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-dim)' }}>
+                <span className="spinner" style={{ marginRight: 8 }} />Cargando archivo...
+              </div>
+            )}
+
+            {bajasMsg && (
+              <div style={{
+                padding: '12px 16px', borderRadius: 8, marginBottom: 16,
+                background: bajasMsg.startsWith('Error') ? '#fef2f2' : '#f0fdf4',
+                color: bajasMsg.startsWith('Error') ? '#dc2626' : '#16a34a',
+                fontSize: 13, fontWeight: 600
+              }}>
+                <i className={`fa-solid ${bajasMsg.startsWith('Error') ? 'fa-circle-xmark' : 'fa-circle-check'}`} style={{ marginRight: 8 }} />
+                {bajasMsg}
+              </div>
+            )}
+
+            <div style={{ background: 'var(--bg-card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)' }}>
+              <h3 style={{ margin: '0 0 8px', fontSize: 14 }}><i className="fa-solid fa-info-circle" style={{ color: '#3b82f6', marginRight: 8 }} />¿Cómo funciona?</h3>
+              <ul style={{ fontSize: 12, color: 'var(--text-dim)', margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
+                <li>Sube los archivos Excel de bajas (DT, renuncias, etc.) por empresa</li>
+                <li>El sistema guarda los registros con su <strong>fecha de cese</strong> y <strong>código de trabajador</strong></li>
+                <li>Al consultar datos de un día, se excluyen automáticamente los trabajadores cesados antes de esa fecha</li>
+                <li>Puedes subir el archivo actualizado y se reemplazarán los registros existentes</li>
+              </ul>
+            </div>
+          </section>
         )}
       </main>
     </div>
