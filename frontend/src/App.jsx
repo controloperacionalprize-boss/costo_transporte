@@ -5,7 +5,7 @@ import 'ag-grid-community/styles/ag-theme-alpine.css';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, CircleMarker, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Line, Legend, AreaChart, Area, ComposedChart } from 'recharts';
+import { Bar, BarChart, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Line, Legend, AreaChart, Area, ComposedChart } from 'recharts';
 
 const SESSION_ID = crypto.randomUUID();
 
@@ -63,9 +63,9 @@ const PEAJES_POR_ZONA = {
 const ZONA_A_SECTOR = {
   'OTUZCO': 'SUR II', 'TRIGOPAMPA': 'SUR II', 'SAN VICENTE': 'SUR II', 'CHAO': 'SUR II', 'VIRU': 'SUR II', 'SAN IGNACIO': 'SUR II',
   'CARTAVIO': 'LOCAL', 'CASA GRANDE': 'LOCAL', 'CHICAMA': 'LOCAL', 'CHIQUITOY': 'LOCAL', 'PAIJAN': 'LOCAL', 'MACABI': 'LOCAL', 'MACABÍ': 'LOCAL',
-  'LICAPA': 'LOCAL', 'CHUIN': 'LOCAL', 'PUERTO MALABRIGO': 'LOCAL', 'ROMA': 'LOCAL', 'SANTIAGO DE CAO': 'LOCAL', 'SAUSAL': 'LOCAL',
+  'LICAPA': 'LOCAL', 'CHUIN': 'LOCAL', 'PUERTO MALABRIGO': 'LOCAL', 'ROMA': 'LOCAL', 'SANTIAGO DE CAO': 'LOCAL', 'SAUSAL': 'LOCAL', 'ASCOPE': 'LOCAL',
   'CIUDAD DE DIOS': 'NORTE', 'GUADALUPE': 'NORTE', 'PACANGUILLA': 'NORTE', 'PACASMAYO': 'NORTE', 'VERDÚN': 'NORTE', 'VERDUN': 'NORTE',
-  'JEQUETEPEQUE': 'NORTE', 'CHEQUÉN': 'NORTE', 'CHEQUEN': 'NORTE', 'SEMAN': 'NORTE',
+  'JEQUETEPEQUE': 'NORTE', 'CHEQUÉN': 'NORTE', 'CHEQUEN': 'NORTE', 'SEMAN': 'NORTE', 'LIMONCARRO': 'NORTE',
   'TRUJILLO': 'SUR', 'ALTO TRUJILLO': 'SUR', 'LA ESPERANZA': 'SUR', 'LAREDO': 'SUR', 'PORVENIR': 'SUR',
   'MANUEL AREVALO': 'SUR', 'ALTO MOCHE': 'SUR', 'EL MILAGRO': 'SUR',
   'CHICLAYO': 'NORTE II', 'POMALCA': 'NORTE II', 'JOSE LEONARDO ORTIZ': 'NORTE II', 'CALETA SANTA ROSA': 'NORTE II', 'CALETA SAN JOSE': 'NORTE II',
@@ -146,7 +146,7 @@ function MultiSelectFilter({ label, options, selected, onChange }) {
 }
 
 // ─── Sidebar ───────────────────────────────────────────────────────────────
-function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab, empresa, bajasCount, bajasUploading, bajasMsg, uploadBajas }) {
+function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab, empresa }) {
   const [dbLoading, setDbLoading] = useState(false);
   const [dbProgress, setDbProgress] = useState(null);
 
@@ -224,7 +224,7 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
           <span className="nav-icon"><i className="fa-solid fa-chart-line" /></span> Indicadores
         </button>
         <button className={`sidebar-nav-item ${activeTab === 'bajas' ? 'active' : ''}`} onClick={() => setActiveTab('bajas')}>
-          <span className="nav-icon"><i className="fa-solid fa-user-minus" /></span> Bajas {bajasCount > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, marginLeft: 6 }}>{bajasCount}</span>}
+          <span className="nav-icon"><i className="fa-solid fa-user-minus" /></span> Bajas
         </button>
       </nav>
 
@@ -896,9 +896,10 @@ export default function App() {
 
   const [expandedSector, setExpandedSector] = useState(null);
 
-  const [bajasCount, setBajasCount] = useState(0);
-  const [bajasUploading, setBajasUploading] = useState(false);
-  const [bajasMsg, setBajasMsg] = useState('');
+  const [novedadesUploading, setNovedadesUploading] = useState(false);
+  const [novedadesMsg, setNovedadesMsg] = useState('');
+  const [novedades, setNovedades] = useState([]);
+  const [novedadForm, setNovedadForm] = useState({ fecha: '', zona: '', dni: '', nombre: '', motivo: '', tipo: 'contar' });
 
   const [comparativa, setComparativa] = useState(null);
   const [comparativaLoading, setComparativaLoading] = useState(false);
@@ -963,25 +964,49 @@ export default function App() {
     if (activeTab === 'comparativa' && !comparativa) loadComparativa(comparativaFecha);
   }, [activeTab]);
 
-  useEffect(() => {
-    api('/api/bajas/count').then(d => setBajasCount(d.count)).catch(() => {});
-  }, []);
 
-  const uploadBajas = async (file, empresa) => {
-    setBajasUploading(true);
-    setBajasMsg('');
+  const uploadNovedadesMasivo = async (file) => {
+    setNovedadesUploading(true);
+    setNovedadesMsg('');
     try {
       const form = new FormData();
       form.append('file', file);
-      form.append('empresa', empresa);
-      const res = await fetch('/api/bajas/upload', { method: 'POST', body: form });
+      const res = await fetch('/api/novedades/upload', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Error');
-      setBajasMsg(`${data.inserted} registros cargados de ${data.filename}`);
-      const cnt = await api('/api/bajas/count');
-      setBajasCount(cnt.count);
-    } catch (e) { setBajasMsg('Error: ' + e.message); }
-    setBajasUploading(false);
+      setNovedadesMsg(`${data.inserted} novedades cargadas de ${data.filename}`);
+      loadNovedades(novedadForm.fecha);
+    } catch (e) { setNovedadesMsg('Error: ' + e.message); }
+    setNovedadesUploading(false);
+  };
+
+  const loadNovedades = async (fecha) => {
+    try {
+      const params = fecha ? `?fecha=${fecha}` : '';
+      const res = await api(`/api/novedades${params}`);
+      setNovedades(res.rows || []);
+    } catch (e) { console.error(e); }
+  };
+  const guardarNovedad = async () => {
+    if (!novedadForm.fecha || !novedadForm.dni) return alert('Fecha y DNI son requeridos');
+    try {
+      await api('/api/novedades', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(novedadForm) });
+      setNovedadForm({ fecha: novedadForm.fecha, zona: '', dni: '', nombre: '', motivo: '', tipo: 'contar' });
+      loadNovedades(novedadForm.fecha);
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+  const eliminarNovedad = async (id) => {
+    try {
+      await api(`/api/novedades/${id}`, { method: 'DELETE' });
+      loadNovedades(novedadForm.fecha);
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+  const toggleNovedadTipo = async (nov) => {
+    const nuevoTipo = nov.tipo === 'contar' ? 'no_contar' : 'contar';
+    try {
+      await api(`/api/novedades/${nov.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...nov, tipo: nuevoTipo }) });
+      loadNovedades(novedadForm.fecha);
+    } catch (e) { alert('Error: ' + e.message); }
   };
 
   const [indicadorMes, setIndicadorMes] = useState('');
@@ -1112,9 +1137,8 @@ export default function App() {
       setFilters(res.filters || { cecos: [], zonas: [], placas: [] });
     } catch (e) { alert('Error procesando: ' + e.message); }
     setProcessing(false);
-    // Cargar unificaciones guardadas para esta fecha
+    loadKilosExport(fechaParam);
     setTimeout(() => loadUnificaciones(fechaParam), 100);
-    setTimeout(() => loadKilosExport(fechaParam), 200);
   };
 
   const filteredCruce = useMemo(() => {
@@ -1174,12 +1198,12 @@ export default function App() {
       valueGetter: params => {
         const bus = params.data?.BUS;
         if (busesEjecutados.has(bus)) return 'Ejecutado';
-        if (busesProgramados.has(bus)) return 'Programado';
+        if (busesProgramados.has(bus)) return 'Sugerido';
         return '';
       },
       cellRenderer: params => {
         if (params.value === 'Ejecutado') return React.createElement('span', { style: { background: '#dcfce7', color: '#16a34a', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, '✓ Ejecutado');
-        if (params.value === 'Programado') return React.createElement('span', { style: { background: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, 'Programado');
+        if (params.value === 'Sugerido') return React.createElement('span', { style: { background: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, 'Sugerido');
         return null;
       },
     };
@@ -1442,7 +1466,6 @@ export default function App() {
         dbStatus={dbStatus} setDbStatus={setDbStatus}
         activeTab={activeTab} setActiveTab={setActiveTab}
         empresa={empresaName}
-        bajasCount={bajasCount} bajasUploading={bajasUploading} bajasMsg={bajasMsg} uploadBajas={uploadBajas}
         onDataLoaded={(statusData) => {
           setCruce([]); setPersonas([]); setMetrics(null); setRebalanceo(null);
           setRutasData(null); setRouteDistances(null); setDetailPlaca(''); setUnificaciones([]); runProcess(statusData?.fecha);
@@ -1481,11 +1504,11 @@ export default function App() {
             <MetricCard title="CAPACIDAD TOTAL" value={filteredMetrics.capacidad} color="green" icon={<i className="fa-solid fa-users" />} />
             <MetricCard title="PASAJEROS REALES" value={filteredMetrics.pasajeros_reales} color="green" icon={<i className="fa-solid fa-user-check" />} />
             <MetricCard title="ASIENTOS VACÍOS" value={filteredMetrics.asientos_vacios} color="red" icon={<i className="fa-solid fa-chair" />} />
-            <MetricCard title="PÉRDIDA PONDERADA" value={(() => { const c = filteredMetrics.capacidad || 1, t = filteredMetrics.tarifa_total || 0, v = filteredMetrics.asientos_vacios > 0 ? filteredMetrics.asientos_vacios : 0; return `S/${(t / c * v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`; })()} color="red" icon={<i className="fa-solid fa-scale-unbalanced" />} />
+            <MetricCard title="COSTO ASIENTOS VACIOS" value={(() => { const c = filteredMetrics.capacidad || 1, t = filteredMetrics.tarifa_total || 0, v = filteredMetrics.asientos_vacios > 0 ? filteredMetrics.asientos_vacios : 0; return `S/${(t / c * v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`; })()} color="red" icon={<i className="fa-solid fa-scale-unbalanced" />} />
           </section>
         )}
 
-        {activeTab === 'cosecha' && kilosExport && cruce.length > 0 && (
+        {activeTab === 'cosecha' && kilosExport && (
           <section style={{ margin: '12px 0', padding: 16, background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1827,7 +1850,7 @@ export default function App() {
                   <div style={{ display: 'flex', gap: 16, fontSize: 13, marginTop: 8 }}>
                     <span style={{ color: '#f59e0b', fontWeight: 600 }}>
                       <i className="fa-solid fa-clock" style={{ marginRight: 4 }} />
-                      Programados: {busesProgramados.size}
+                      Sugeridos: {busesProgramados.size}
                     </span>
                     <span style={{ color: '#7c3aed', fontWeight: 600 }}>
                       <i className="fa-solid fa-compress" style={{ marginRight: 4 }} />
@@ -1899,6 +1922,11 @@ export default function App() {
                 return (
                 <div key={idx} className={`rebal-card ${rebalOpen[idx] ? 'open' : ''}`}>
                   <div className="rebal-card-header" onClick={() => toggleRebal(idx)}>
+                    {rec.es_receptor && (
+                      <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, color: '#fff', marginRight: 6, background: '#2563eb' }}>
+                        RECEPTOR
+                      </span>
+                    )}
                     {rec.prioridad && (
                       <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 700, color: '#fff', marginRight: 6, background: rec.prioridad === 'critico' ? '#dc2626' : rec.prioridad === 'urgente' ? '#f59e0b' : '#6b7280' }}>
                         {rec.prioridad === 'critico' ? 'CRITICO' : rec.prioridad === 'urgente' ? 'URGENTE' : 'RECOMENDADO'}
@@ -2119,6 +2147,56 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
+
+                      {/* Chart: Tarifa sin optimizar vs con optimizacion */}
+                      {ahorrosSemanal.dias?.some(d => d.tarifa_total > 0) && (() => {
+                        const chartData = ahorrosSemanal.dias.map(d => ({
+                          dia: d.dia,
+                          sinOpt: d.tarifa_total,
+                          conOpt: d.tarifa_optimizada,
+                          diff: d.tarifa_total - d.tarifa_optimizada,
+                        }));
+                        const fmtK = v => Math.round(v).toLocaleString();
+                        const CustomLabel = ({ x, y, width, value, fill }) => (
+                          <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={10} fontWeight={700} fill={fill}>{fmtK(value)}</text>
+                        );
+                        const DiffLabel = (props) => {
+                          const { x, y, width, index } = props;
+                          const d = chartData[index];
+                          if (!d || d.diff === 0) return null;
+                          const isPos = d.diff > 0;
+                          const label = `${isPos ? '+' : '-'}${fmtK(Math.abs(d.diff))}`;
+                          return (
+                            <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize={11} fontWeight={700} fill={isPos ? '#16a34a' : '#dc2626'}>
+                              {label} {isPos ? '↑' : '↓'}
+                            </text>
+                          );
+                        };
+                        return (
+                        <div style={{ marginTop: 24 }}>
+                          <h4 style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--text-secondary)' }}>
+                            <i className="fa-solid fa-chart-column" style={{ marginRight: 6 }} />
+                            Comparativo de Tarifa Semanal
+                          </h4>
+                          <ResponsiveContainer width="100%" height={350}>
+                            <BarChart data={chartData} barGap={4} barCategoryGap="25%" margin={{ top: 25, right: 10, left: 10, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                              <XAxis dataKey="dia" tick={{ fontSize: 12, fontWeight: 600 }} axisLine={false} tickLine={false} />
+                              <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `S/${fmtK(v)}`} axisLine={false} tickLine={false} />
+                              <RTooltip
+                                formatter={(v, name) => [`S/${v.toLocaleString(undefined, {minimumFractionDigits:2})}`, name === 'sinOpt' ? 'Sin optimizar' : 'Con optimizacion']}
+                                labelFormatter={l => l}
+                                contentStyle={{ borderRadius: 8, fontSize: 12, border: '1px solid var(--border)' }}
+                              />
+                              <Legend formatter={v => v === 'sinOpt' ? 'Sin optimizar' : 'Con optimizacion'} wrapperStyle={{ fontSize: 12 }} />
+                              <Bar dataKey="sinOpt" fill="#3b82f6" radius={[6,6,0,0]} label={<CustomLabel fill="#3b82f6" />} />
+                              <Bar dataKey="conOpt" fill="#22c55e" radius={[6,6,0,0]} label={<DiffLabel />}>
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -2335,56 +2413,123 @@ export default function App() {
         {activeTab === 'bajas' && (
           <section style={{ padding: '0 8px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-              <h2 style={{ margin: 0 }}><i className="fa-solid fa-user-minus" style={{ marginRight: 8 }} />Gestión de Bajas</h2>
-              <span style={{ background: 'var(--bg-card)', padding: '6px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600 }}>
-                {bajasCount} registros en BD
-              </span>
+              <h2 style={{ margin: 0 }}><i className="fa-solid fa-user-minus" style={{ marginRight: 8 }} />Novedades de Personal</h2>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16, marginBottom: 20 }}>
-              {['AQU ANQA SAC', 'AQU ANQA II SAC'].map(emp => (
-                <div key={emp} style={{ background: 'var(--bg-card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)' }}>
-                  <h3 style={{ margin: '0 0 12px', fontSize: 14 }}><i className="fa-solid fa-file-excel" style={{ color: '#16a34a', marginRight: 8 }} />{emp}</h3>
-                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 12px' }}>Sube el Excel de bajas para {emp}</p>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={e => {
-                      if (e.target.files[0]) uploadBajas(e.target.files[0], emp);
-                    }}
-                    disabled={bajasUploading}
-                    style={{ fontSize: 12 }}
-                  />
+            {/* Formulario para agregar novedad */}
+            <div style={{ background: 'var(--bg-card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)', marginBottom: 16 }}>
+              <h3 style={{ margin: '0 0 12px', fontSize: 14 }}><i className="fa-solid fa-plus-circle" style={{ color: '#3b82f6', marginRight: 8 }} />Agregar Novedad</h3>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>Fecha</label>
+                  <input type="date" value={novedadForm.fecha} onChange={e => setNovedadForm({ ...novedadForm, fecha: e.target.value })} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12 }} />
                 </div>
-              ))}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>Zona</label>
+                  <input value={novedadForm.zona} onChange={e => setNovedadForm({ ...novedadForm, zona: e.target.value })} placeholder="Zona" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, width: 120 }} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>DNI</label>
+                  <input value={novedadForm.dni} onChange={e => setNovedadForm({ ...novedadForm, dni: e.target.value })} placeholder="DNI" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, width: 100 }} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>Nombres y Apellidos</label>
+                  <input value={novedadForm.nombre} onChange={e => setNovedadForm({ ...novedadForm, nombre: e.target.value })} placeholder="Nombre completo" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, width: 200 }} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>Motivo</label>
+                  <input value={novedadForm.motivo} onChange={e => setNovedadForm({ ...novedadForm, motivo: e.target.value })} placeholder="Motivo" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12, width: 160 }} />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)' }}>Tipo</label>
+                  <select value={novedadForm.tipo} onChange={e => setNovedadForm({ ...novedadForm, tipo: e.target.value })} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 12 }}>
+                    <option value="contar">Contar</option>
+                    <option value="no_contar">No contar</option>
+                  </select>
+                </div>
+                <button onClick={guardarNovedad} className="btn btn-primary" style={{ fontSize: 12, padding: '6px 16px', background: '#3b82f6', border: 'none', borderRadius: 6, color: '#fff', fontWeight: 600, cursor: 'pointer' }}>
+                  <i className="fa-solid fa-plus" style={{ marginRight: 4 }} />Agregar
+                </button>
+                <button onClick={() => loadNovedades(novedadForm.fecha)} className="btn" style={{ fontSize: 12, padding: '6px 16px', background: '#f3f4f6', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer' }}>
+                  <i className="fa-solid fa-search" style={{ marginRight: 4 }} />Buscar
+                </button>
+              </div>
             </div>
 
-            {bajasUploading && (
-              <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-dim)' }}>
-                <span className="spinner" style={{ marginRight: 8 }} />Cargando archivo...
-              </div>
-            )}
+            {/* Info */}
+            <div style={{ background: '#eff6ff', borderRadius: 8, padding: '10px 16px', marginBottom: 16, fontSize: 12, color: '#1e40af', border: '1px solid #bfdbfe' }}>
+              <i className="fa-solid fa-info-circle" style={{ marginRight: 6 }} />
+              <strong>Contar:</strong> falta temporal (hoy no viene, manana si). <strong>No contar:</strong> baja permanente (no se cuenta de esa fecha en adelante en el algoritmo).
+            </div>
 
-            {bajasMsg && (
-              <div style={{
-                padding: '12px 16px', borderRadius: 8, marginBottom: 16,
-                background: bajasMsg.startsWith('Error') ? '#fef2f2' : '#f0fdf4',
-                color: bajasMsg.startsWith('Error') ? '#dc2626' : '#16a34a',
-                fontSize: 13, fontWeight: 600
-              }}>
-                <i className={`fa-solid ${bajasMsg.startsWith('Error') ? 'fa-circle-xmark' : 'fa-circle-check'}`} style={{ marginRight: 8 }} />
-                {bajasMsg}
-              </div>
-            )}
-
+            {/* Tabla de novedades */}
             <div style={{ background: 'var(--bg-card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)' }}>
-              <h3 style={{ margin: '0 0 8px', fontSize: 14 }}><i className="fa-solid fa-info-circle" style={{ color: '#3b82f6', marginRight: 8 }} />¿Cómo funciona?</h3>
-              <ul style={{ fontSize: 12, color: 'var(--text-dim)', margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
-                <li>Sube los archivos Excel de bajas (DT, renuncias, etc.) por empresa</li>
-                <li>El sistema guarda los registros con su <strong>fecha de cese</strong> y <strong>código de trabajador</strong></li>
-                <li>Al consultar datos de un día, se excluyen automáticamente los trabajadores cesados antes de esa fecha</li>
-                <li>Puedes subir el archivo actualizado y se reemplazarán los registros existentes</li>
-              </ul>
+              <h3 style={{ margin: '0 0 12px', fontSize: 14 }}>
+                <i className="fa-solid fa-list" style={{ color: '#6b7280', marginRight: 8 }} />
+                Novedades {novedadForm.fecha && `del ${novedadForm.fecha}`} ({novedades.length})
+              </h3>
+              {novedades.length === 0 ? (
+                <p style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 20, fontSize: 13 }}>
+                  No hay novedades registradas. Selecciona una fecha y presiona "Buscar", o agrega una nueva.
+                </p>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="mini-table" style={{ width: '100%', fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        <th>Fecha</th>
+                        <th>Zona</th>
+                        <th>DNI</th>
+                        <th>Nombres y Apellidos</th>
+                        <th>Motivo</th>
+                        <th>Tipo</th>
+                        <th style={{ width: 60 }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {novedades.map(nov => (
+                        <tr key={nov.id}>
+                          <td>{nov.fecha}</td>
+                          <td>{nov.zona || '-'}</td>
+                          <td style={{ fontFamily: 'var(--mono)' }}>{nov.dni}</td>
+                          <td>{nov.nombre || '-'}</td>
+                          <td>{nov.motivo || '-'}</td>
+                          <td>
+                            <button onClick={() => toggleNovedadTipo(nov)} style={{
+                              padding: '2px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700, border: 'none', cursor: 'pointer',
+                              background: nov.tipo === 'contar' ? '#dcfce7' : '#fee2e2',
+                              color: nov.tipo === 'contar' ? '#16a34a' : '#dc2626',
+                            }}>
+                              {nov.tipo === 'contar' ? 'CONTAR' : 'NO CONTAR'}
+                            </button>
+                          </td>
+                          <td>
+                            <button onClick={() => eliminarNovedad(nov.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 13 }}>
+                              <i className="fa-solid fa-trash" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Carga masiva de novedades */}
+            <div style={{ marginTop: 20, background: 'var(--bg-card)', borderRadius: 12, padding: 20, border: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontSize: 14 }}><i className="fa-solid fa-file-excel" style={{ color: '#16a34a', marginRight: 8 }} />Carga Masiva (Excel)</h3>
+                <button onClick={() => {
+                  const a = document.createElement('a'); a.href = '/api/novedades/plantilla'; a.download = 'plantilla_novedades.xlsx'; a.click();
+                }} style={{ fontSize: 12, padding: '4px 12px', borderRadius: 6, border: '1px solid #16a34a', background: '#f0fdf4', color: '#16a34a', fontWeight: 600, cursor: 'pointer' }}>
+                  <i className="fa-solid fa-download" style={{ marginRight: 4 }} />Descargar Plantilla
+                </button>
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 8px' }}>Sube un Excel con columnas: <strong>Fecha, Zona, DNI, Nombre, Motivo, Tipo</strong> (contar / no_contar)</p>
+              <input type="file" accept=".xlsx,.xls" onChange={e => { if (e.target.files[0]) uploadNovedadesMasivo(e.target.files[0]); }} disabled={novedadesUploading} style={{ fontSize: 12 }} />
+              {novedadesUploading && <div style={{ textAlign: 'center', padding: 12, color: 'var(--text-dim)' }}><span className="spinner" style={{ marginRight: 8 }} />Cargando...</div>}
+              {novedadesMsg && <div style={{ padding: '8px 12px', borderRadius: 6, marginTop: 8, background: novedadesMsg.startsWith('Error') ? '#fef2f2' : '#f0fdf4', color: novedadesMsg.startsWith('Error') ? '#dc2626' : '#16a34a', fontSize: 12, fontWeight: 600 }}>{novedadesMsg}</div>}
             </div>
           </section>
         )}

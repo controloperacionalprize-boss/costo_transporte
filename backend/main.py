@@ -959,13 +959,35 @@ def process(req: ProcessRequest):
             personas["GRUPO"] = personas["GRUPO"].fillna("")
             personas.drop(columns=["DNI_GRP"], inplace=True, errors="ignore")
 
+    # --- Marcar novedades "no contar" ---
+    try:
+        _ensure_novedades_table()
+        conn_nov = _get_db_conn()
+        fecha_proc = sess.get("fecha", "")
+        if fecha_proc:
+            df_nov = pd.read_sql("SELECT dni, tipo FROM novedades_personal WHERE fecha <= %s", conn_nov, params=(fecha_proc,))
+        else:
+            df_nov = pd.read_sql("SELECT dni, tipo FROM novedades_personal", conn_nov)
+        conn_nov.close()
+        if len(df_nov) > 0:
+            no_contar_dnis = set(df_nov[df_nov["tipo"] == "no_contar"]["dni"].astype(str).str.strip())
+            if no_contar_dnis:
+                personas["DNI PASA."] = personas["DNI PASA."].astype(str).str.strip()
+                personas["NO_CONTAR"] = personas["DNI PASA."].isin(no_contar_dnis)
+    except Exception:
+        pass
+
     # --- Debug: log count per placa before cruce ---
     import logging
     for p in ["Y1P-032"]:
         cnt = len(personas[personas["PLACA"] == p])
         logging.info(f"DEBUG PLACA {p}: {cnt} personas before cruce")
     # --- Cruce por placa ---
-    personas_activas = personas[personas.get("CESADO", pd.Series(False, index=personas.index)) == False] if "CESADO" in personas.columns else personas
+    personas_activas = personas.copy()
+    if "CESADO" in personas_activas.columns:
+        personas_activas = personas_activas[personas_activas["CESADO"] == False]
+    if "NO_CONTAR" in personas_activas.columns:
+        personas_activas = personas_activas[personas_activas["NO_CONTAR"] == False]
     asist_placa = personas_activas.groupby("PLACA").agg(PAS_REAL=("DNI PASA.", "count")).reset_index()
     if "CESADO" in personas.columns:
         cesados_placa = personas[personas["CESADO"] == True].groupby("PLACA").agg(PAS_CESADOS=("DNI PASA.", "count")).reset_index()
@@ -1183,11 +1205,29 @@ def rebalanceo(req: RebalanceoRequest):
     buses_baja = buses_baja.sort_values("% OCUP. REAL", ascending=True)
 
     for _, bus_b in buses_baja.iterrows():
-        placa_baja_check = bus_b["BUS"]
-        # Si este bus ya es receptor de pasajeros de otro eliminado, no puede eliminarse
-        if placa_baja_check in buses_receptores:
-            continue
         placa_baja = bus_b["BUS"]
+        es_receptor = placa_baja in buses_receptores
+        if es_receptor:
+            ocup_val = round(float(_safe(bus_b["% OCUP. REAL"], 0)), 1)
+            prioridad = "critico" if ocup_val < 50 else "urgente" if ocup_val < 65 else "recomendado"
+            recomendaciones.append({
+                "placa": placa_baja,
+                "ruta": str(_safe(bus_b["RUTA"], "")),
+                "zona": str(_safe(bus_b["ZONA_PROCEDENCIA"], "")),
+                "ceco": str(_safe(bus_b["CECO"], "")),
+                "tipo": str(_safe(bus_b["T_BUS"], "")),
+                "capacidad": int(bus_b["CAPACIDAD"]),
+                "pasajeros": int(bus_b["PAS_REAL"]),
+                "ocup": ocup_val,
+                "tarifa": round(float(_safe(bus_b["TARIFA"], 0)), 2),
+                "costo_pasajero": round(float(_safe(bus_b["TARIFA"], 0)) / max(int(_safe(bus_b["PAS_REAL"], 0)), 1), 2),
+                "perdida": round((float(_safe(bus_b["TARIFA"], 0)) / max(int(_safe(bus_b["CAPACIDAD"], 1)), 1)) * int(_safe(bus_b["ASIENTOS_VACIOS"], 0)), 2),
+                "consolidar_con": None,
+                "prioridad": prioridad,
+                "asignaciones": [],
+                "es_receptor": True,
+            })
+            continue
         ruta_baja = bus_b["RUTA"]
         origen_baja = _origen_ruta(ruta_baja)
         zona_baja = bus_b["ZONA_PROCEDENCIA"]
@@ -1655,6 +1695,7 @@ ZONAS_COORDS = {
     "MANUEL AREVALO": {"lat": -8.0672429, "lng": -79.0630932},
     "LIMONCARRO": {"lat": -7.3037166, "lng": -79.4183427},
     "HUANCHACO": {"lat": -8.083575147307053, "lng": -79.11404277711053},
+    "ASCOPE": {"lat": -7.7134, "lng": -79.1075},
 }
 
 DESTINOS_PLANTA = {
@@ -2028,7 +2069,20 @@ def ahorros_semanal(req: AhorroSemanalRequest):
 
         for dia in dias_semana:
             dia_str = dia.strftime("%Y-%m-%d")
-            dia_sig = (dia + timedelta(days=1)).strftime("%Y-%m-%d")
+            if dia.weekday() == 4:  # Friday -> next Monday
+                dia_sig = (dia + timedelta(days=3)).strftime("%Y-%m-%d")
+            else:
+                dia_sig = (dia + timedelta(days=1)).strftime("%Y-%m-%d")
+
+            # Total tarifa of all buses for this day (sin optimizar)
+            cur.execute(f"""
+                SELECT COALESCE(SUM("TARIFA"::numeric), 0) FROM (
+                    SELECT "TARIFA", "FECHA" FROM rpt_controlbus_viajes_aq1
+                    UNION ALL
+                    SELECT "TARIFA", "FECHA" FROM rpt_controlbus_viajes_aq2
+                ) v WHERE "FECHA" = '{dia_str}'
+            """)
+            tarifa_total_dia = float(cur.fetchone()[0])
 
             # Get new ejecutados (bajas) for this day
             cur.execute("""
@@ -2117,6 +2171,8 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                 "ahorro_nuevo": round(ahorro_nuevo, 2),
                 "ahorro_dia": round(ahorro_dia_total, 2),
                 "ahorro_acumulado": round(ahorro_acumulado, 2),
+                "tarifa_total": round(tarifa_total_dia, 2),
+                "tarifa_optimizada": round(tarifa_total_dia - ahorro_dia_total, 2),
             })
 
         conn.close()
@@ -2358,100 +2414,105 @@ def facilito_data(
 # BAJAS (personal cesado) — tabla + endpoints
 # ---------------------------------------------------------------------------
 
-def _ensure_bajas_table():
-    conn = _get_db_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bajas_personal (
-            id SERIAL PRIMARY KEY,
-            fecha_ingreso DATE,
-            fecha_cese DATE,
-            idcodigogeneral VARCHAR(20),
-            idplanilla VARCHAR(10),
-            apellido_paterno VARCHAR(100),
-            apellido_materno VARCHAR(100),
-            nombres VARCHAR(100),
-            empresa VARCHAR(100),
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_bajas_fecha_cese ON bajas_personal(fecha_cese)
-    """)
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_bajas_idcodigo ON bajas_personal(idcodigogeneral)
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+
+@app.get("/api/novedades/plantilla")
+def descargar_plantilla_novedades():
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from fastapi.responses import StreamingResponse
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Novedades"
+
+    headers = ["Fecha", "Zona", "DNI", "Nombre", "Motivo", "Tipo"]
+    fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    font_h = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
+    widths = [14, 18, 12, 35, 25, 14]
+
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.fill = fill
+        c.font = font_h
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = border
+
+    examples = [
+        ["2026-10-23", "CHIQUITOY", "12345678", "GARCIA LOPEZ JUAN", "Permiso medico", "contar"],
+        ["2026-10-23", "CASA GRANDE", "87654321", "MARTINEZ DIAZ PEDRO", "Renuncia", "no_contar"],
+    ]
+    for r, row in enumerate(examples, 2):
+        for ci, val in enumerate(row, 1):
+            cell = ws.cell(row=r, column=ci, value=val)
+            cell.font = Font(name="Calibri", size=10)
+            cell.border = border
+
+    for i, w in enumerate(widths):
+        ws.column_dimensions[chr(65 + i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": "attachment; filename=plantilla_novedades.xlsx"})
 
 
-@app.post("/api/bajas/upload")
-async def upload_bajas(file: UploadFile = File(...), empresa: str = Form("")):
-    _ensure_bajas_table()
+@app.post("/api/novedades/upload")
+async def upload_novedades(file: UploadFile = File(...)):
+    _ensure_novedades_table()
     content = await file.read()
     df = pd.read_excel(io.BytesIO(content))
-    df.columns = df.columns.str.strip().str.upper()
+    df.columns = df.columns.str.strip()
 
     col_map = {}
     for c in df.columns:
-        cl = c.lower()
-        if "fecha" in cl and "ingreso" in cl:
-            col_map["fecha_ingreso"] = c
-        elif "fecha" in cl and "cese" in cl:
-            col_map["fecha_cese"] = c
-        elif "idcodigogeneral" in cl or ("codigo" in cl and "general" in cl):
-            col_map["idcodigogeneral"] = c
-        elif "idplanilla" in cl or "planilla" in cl:
-            col_map["idplanilla"] = c
-        elif "paterno" in cl:
-            col_map["apellido_paterno"] = c
-        elif "materno" in cl:
-            col_map["apellido_materno"] = c
-        elif "nombre" in cl:
-            col_map["nombres"] = c
+        cl = c.strip().lower()
+        if cl in ("fecha",):
+            col_map["fecha"] = c
+        elif cl in ("zona",):
+            col_map["zona"] = c
+        elif cl in ("dni", "documento"):
+            col_map["dni"] = c
+        elif "nombre" in cl or "apellido" in cl:
+            col_map["nombre"] = c
+        elif cl in ("motivo",):
+            col_map["motivo"] = c
+        elif cl in ("tipo",):
+            col_map["tipo"] = c
 
-    if "fecha_cese" not in col_map or "idcodigogeneral" not in col_map:
-        raise HTTPException(status_code=422, detail=f"Excel debe tener columnas FECHA_CESE e IDCODIGOGENERAL. Columnas encontradas: {list(df.columns)}")
+    if "fecha" not in col_map or "dni" not in col_map:
+        raise HTTPException(status_code=422, detail=f"Excel debe tener columnas FECHA y DNI. Columnas encontradas: {list(df.columns)}")
 
     conn = _get_db_conn()
     cur = conn.cursor()
 
-    # Limpiar registros previos de esta empresa
-    if empresa:
-        cur.execute("DELETE FROM bajas_personal WHERE empresa = %s", (empresa,))
-
-    # Preparar datos en batch
     rows_to_insert = []
     for _, row in df.iterrows():
-        fecha_cese = row.get(col_map.get("fecha_cese"))
-        idcodigo = str(row.get(col_map.get("idcodigogeneral"), "")).strip()
-        if pd.isna(fecha_cese) or not idcodigo:
+        fecha_val = row.get(col_map.get("fecha"))
+        dni_val = str(row.get(col_map.get("dni"), "")).strip().replace(".0", "")
+        if pd.isna(fecha_val) or not dni_val:
             continue
-        fecha_ingreso = row.get(col_map.get("fecha_ingreso")) if "fecha_ingreso" in col_map else None
-        if pd.notna(fecha_ingreso):
-            fecha_ingreso = str(fecha_ingreso)[:10] if not isinstance(fecha_ingreso, str) else fecha_ingreso
-        else:
-            fecha_ingreso = None
-        fecha_cese_val = str(fecha_cese)[:10] if not isinstance(fecha_cese, str) else fecha_cese
+        fecha_str = str(fecha_val)[:10] if not isinstance(fecha_val, str) else fecha_val
 
-        def safe_str(key):
+        def safe(key):
             if key not in col_map:
                 return ""
             v = row.get(col_map[key], "")
             return str(v).strip() if pd.notna(v) else ""
 
+        tipo = safe("tipo").lower().strip()
+        if tipo not in ("contar", "no_contar"):
+            tipo = "contar"
+
         rows_to_insert.append((
-            fecha_ingreso, fecha_cese_val, idcodigo,
-            safe_str("idplanilla"), safe_str("apellido_paterno"),
-            safe_str("apellido_materno"), safe_str("nombres"), empresa,
+            fecha_str, safe("zona"), dni_val, safe("nombre"), safe("motivo"), tipo
         ))
 
-    # Insert batch
     if rows_to_insert:
         from psycopg2.extras import execute_values
         execute_values(cur, """
-            INSERT INTO bajas_personal (fecha_ingreso, fecha_cese, idcodigogeneral, idplanilla, apellido_paterno, apellido_materno, nombres, empresa)
+            INSERT INTO novedades_personal (fecha, zona, dni, nombre, motivo, tipo)
             VALUES %s
         """, rows_to_insert)
 
@@ -2461,29 +2522,113 @@ async def upload_bajas(file: UploadFile = File(...), empresa: str = Form("")):
     return {"status": "ok", "inserted": len(rows_to_insert), "filename": file.filename}
 
 
-@app.get("/api/bajas")
-def get_bajas(fecha: str = Query("")):
-    _ensure_bajas_table()
-    conn = _get_db_conn()
-    query = "SELECT idcodigogeneral, fecha_cese, apellido_paterno, apellido_materno, nombres, empresa FROM bajas_personal"
-    if fecha:
-        query += f" WHERE fecha_cese <= '{fecha}'"
-    query += " ORDER BY fecha_cese DESC"
-    df = pd.read_sql(query, conn)
-    conn.close()
-    return {"rows": df.to_dict(orient="records"), "total": len(df)}
+# ---------------------------------------------------------------------------
+# NOVEDADES (contar / no contar)
+# ---------------------------------------------------------------------------
 
-
-@app.get("/api/bajas/count")
-def count_bajas():
-    _ensure_bajas_table()
+def _ensure_novedades_table():
     conn = _get_db_conn()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM bajas_personal")
-    count = cur.fetchone()[0]
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS novedades_personal (
+            id SERIAL PRIMARY KEY,
+            fecha DATE NOT NULL,
+            zona VARCHAR(100) DEFAULT '',
+            dni VARCHAR(20) NOT NULL,
+            nombre VARCHAR(200) DEFAULT '',
+            motivo VARCHAR(200) DEFAULT '',
+            tipo VARCHAR(20) NOT NULL DEFAULT 'contar',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_novedades_fecha ON novedades_personal(fecha)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_novedades_dni ON novedades_personal(dni)")
+    conn.commit()
     cur.close()
     conn.close()
-    return {"count": count}
+
+
+class NovedadRequest(BaseModel):
+    fecha: str
+    zona: str = ""
+    dni: str
+    nombre: str = ""
+    motivo: str = ""
+    tipo: str = "contar"
+
+
+@app.post("/api/novedades")
+def create_novedad(req: NovedadRequest):
+    _ensure_novedades_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO novedades_personal (fecha, zona, dni, nombre, motivo, tipo)
+        VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+    """, (req.fecha, req.zona, req.dni.strip(), req.nombre, req.motivo, req.tipo))
+    new_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"id": new_id, "status": "ok"}
+
+
+@app.get("/api/novedades")
+def get_novedades(fecha: str = Query("")):
+    _ensure_novedades_table()
+    conn = _get_db_conn()
+    if fecha:
+        df = pd.read_sql("SELECT id, fecha, zona, dni, nombre, motivo, tipo FROM novedades_personal WHERE fecha = %s ORDER BY id DESC", conn, params=(fecha,))
+    else:
+        df = pd.read_sql("SELECT id, fecha, zona, dni, nombre, motivo, tipo FROM novedades_personal ORDER BY fecha DESC, id DESC", conn)
+    conn.close()
+    rows = df.to_dict(orient="records")
+    for r in rows:
+        if r.get("fecha"):
+            r["fecha"] = str(r["fecha"])
+    return {"rows": rows, "total": len(rows)}
+
+
+@app.delete("/api/novedades/{novedad_id}")
+def delete_novedad(novedad_id: int):
+    _ensure_novedades_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM novedades_personal WHERE id = %s", (novedad_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.put("/api/novedades/{novedad_id}")
+def update_novedad(novedad_id: int, req: NovedadRequest):
+    _ensure_novedades_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE novedades_personal SET fecha=%s, zona=%s, dni=%s, nombre=%s, motivo=%s, tipo=%s WHERE id=%s
+    """, (req.fecha, req.zona, req.dni.strip(), req.nombre, req.motivo, req.tipo, novedad_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/novedades/no-contar")
+def get_no_contar(fecha: str = Query("")):
+    """Returns DNIs that should not be counted for a given date (no contar from that date or earlier)."""
+    _ensure_novedades_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    if fecha:
+        cur.execute("SELECT DISTINCT dni FROM novedades_personal WHERE tipo = 'no_contar' AND fecha <= %s", (fecha,))
+    else:
+        cur.execute("SELECT DISTINCT dni FROM novedades_personal WHERE tipo = 'no_contar'")
+    dnis = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"dnis": dnis}
 
 
 @app.get("/api/kilos-exportacion")
