@@ -1210,6 +1210,14 @@ def rebalanceo(req: RebalanceoRequest):
         if es_receptor:
             ocup_val = round(float(_safe(bus_b["% OCUP. REAL"], 0)), 1)
             prioridad = "critico" if ocup_val < 50 else "urgente" if ocup_val < 65 else "recomendado"
+            # Collect persons assigned TO this receptor from other buses' recommendations
+            asig_rec = []
+            for rec in recomendaciones:
+                if rec.get("es_receptor"):
+                    continue
+                for a in rec.get("asignaciones", []):
+                    if a.get("BUS_DESTINO") == placa_baja:
+                        asig_rec.append(a)
             recomendaciones.append({
                 "placa": placa_baja,
                 "ruta": str(_safe(bus_b["RUTA"], "")),
@@ -1224,7 +1232,7 @@ def rebalanceo(req: RebalanceoRequest):
                 "perdida": round((float(_safe(bus_b["TARIFA"], 0)) / max(int(_safe(bus_b["CAPACIDAD"], 1)), 1)) * int(_safe(bus_b["ASIENTOS_VACIOS"], 0)), 2),
                 "consolidar_con": None,
                 "prioridad": prioridad,
-                "asignaciones": [],
+                "asignaciones": asig_rec,
                 "es_receptor": True,
             })
             continue
@@ -1444,6 +1452,93 @@ def get_ejecutados(session_id: str = Query("default"), fecha: str = Query("")):
         cur = conn.cursor()
         cur.execute("SELECT bus FROM ejecuciones_rebalanceo WHERE fecha = %s", (fecha,))
         result["ejecutados_db"] = [r[0] for r in cur.fetchall()]
+        conn.close()
+    return result
+
+
+# ─── DT (Descanso Tecnico) ─────────────────────────────────────────────────
+
+def _ensure_dt_table():
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS dt_rebalanceo (
+            id SERIAL PRIMARY KEY,
+            fecha DATE NOT NULL,
+            bus VARCHAR(20) NOT NULL,
+            empresa VARCHAR(100),
+            denominacion VARCHAR(200),
+            dias INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(fecha, bus, empresa)
+        )
+    """)
+    cur.execute("""
+        DO $$ BEGIN
+            ALTER TABLE dt_rebalanceo ADD COLUMN dias INTEGER DEFAULT 1;
+        EXCEPTION WHEN duplicate_column THEN NULL;
+        END $$;
+    """)
+    conn.commit()
+    conn.close()
+
+class DTRequest(BaseModel):
+    session_id: str = "default"
+    buses: list[str] = []
+    fecha: str = ""
+    empresa: str = ""
+    denominacion: str = ""
+    dias: int = 1
+
+@app.post("/api/dt")
+def set_dt(req: DTRequest):
+    sess = get_session(req.session_id)
+    dt_buses = sess.get("dt_buses", set())
+    dt_buses.update(req.buses)
+    sess["dt_buses"] = dt_buses
+    if req.fecha and req.buses:
+        _ensure_dt_table()
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        from psycopg2.extras import execute_values
+        values = [(req.fecha, b.strip().upper(), req.empresa, req.denominacion, req.dias) for b in req.buses]
+        execute_values(cur, """
+            INSERT INTO dt_rebalanceo (fecha, bus, empresa, denominacion, dias)
+            VALUES %s ON CONFLICT (fecha, bus, empresa) DO UPDATE SET dias = EXCLUDED.dias
+        """, values)
+        conn.commit()
+        conn.close()
+    return {"status": "ok", "dt_buses": list(dt_buses)}
+
+@app.delete("/api/dt")
+def remove_dt(req: EjecutadosRequest):
+    sess = get_session(req.session_id)
+    dt_buses = sess.get("dt_buses", set())
+    dt_buses -= set(req.buses)
+    sess["dt_buses"] = dt_buses
+    if req.fecha and req.buses:
+        _ensure_dt_table()
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        placeholders = ",".join(["%s"] * len(req.buses))
+        cur.execute(f"""
+            DELETE FROM dt_rebalanceo
+            WHERE fecha = %s AND bus IN ({placeholders})
+        """, [req.fecha] + [b.strip().upper() for b in req.buses])
+        conn.commit()
+        conn.close()
+    return {"status": "ok", "dt_buses": list(dt_buses)}
+
+@app.get("/api/dt")
+def get_dt(session_id: str = Query("default"), fecha: str = Query("")):
+    sess = get_session(session_id)
+    result = {"dt_buses": list(sess.get("dt_buses", set()))}
+    if fecha:
+        _ensure_dt_table()
+        conn = _get_db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT bus FROM dt_rebalanceo WHERE fecha = %s", (fecha,))
+        result["dt_buses_db"] = [r[0] for r in cur.fetchall()]
         conn.close()
     return result
 
@@ -2047,25 +2142,79 @@ def ahorros_semanal(req: AhorroSemanalRequest):
         lunes = datetime.strptime(req.fecha_inicio, "%Y-%m-%d").date()
         dias_semana = [(lunes + timedelta(days=i)) for i in range(5)]
 
+        _ensure_ejecuciones_table()
+        _ensure_dt_table()
+
         conn = _get_db_conn()
         cur = conn.cursor()
-        _ensure_ejecuciones_table()
+
+        den_filter = f"""AND "DENOMINACION CECO" = '{req.denominacion}'""" if req.denominacion else ""
 
         def _get_tarifa_bus(fecha_str, bus):
             q = f"""
                 SELECT SUM("TARIFA"::numeric) FROM (
-                    SELECT "TARIFA", "BUS", "FECHA" FROM rpt_controlbus_viajes_aq1
+                    SELECT "TARIFA", "BUS", "FECHA", "DENOMINACION CECO" FROM rpt_controlbus_viajes_aq1
                     UNION ALL
-                    SELECT "TARIFA", "BUS", "FECHA" FROM rpt_controlbus_viajes_aq2
-                ) v WHERE "FECHA" = '{fecha_str}' AND UPPER(TRIM("BUS")) = '{bus}'
+                    SELECT "TARIFA", "BUS", "FECHA", "DENOMINACION CECO" FROM rpt_controlbus_viajes_aq2
+                ) v WHERE "FECHA" = '{fecha_str}' AND UPPER(TRIM("BUS")) = '{bus}' {den_filter}
             """
             cur.execute(q)
             row = cur.fetchone()
             return float(row[0]) if row and row[0] else 0
 
+        # Tarifa base: lunes (se usa como referencia fija toda la semana)
+        lunes_str = lunes.strftime("%Y-%m-%d")
+        cur.execute(f"""
+            SELECT COALESCE(SUM("TARIFA"::numeric), 0) FROM (
+                SELECT "TARIFA", "FECHA", "DENOMINACION CECO" FROM rpt_controlbus_viajes_aq1
+                UNION ALL
+                SELECT "TARIFA", "FECHA", "DENOMINACION CECO" FROM rpt_controlbus_viajes_aq2
+            ) v WHERE "FECHA" = '{lunes_str}' {den_filter}
+        """)
+        tarifa_base_lunes = float(cur.fetchone()[0])
+
+        # Conexion Zupra para kilos por dia
+        try:
+            zupra_conn = _get_zupra_conn()
+            zupra_cur = zupra_conn.cursor()
+            has_zupra = True
+        except Exception:
+            has_zupra = False
+
         resultado_dias = []
         ahorro_acumulado = 0
         acciones_activas = []  # actions that keep generating savings
+        dt_activos = []  # DT buses that carry over to next days (no savings)
+
+        # Pre-load DTs from previous weeks whose effect days fall into this week
+        lunes_str_week = dias_semana[0].strftime("%Y-%m-%d")
+        viernes_str_week = dias_semana[4].strftime("%Y-%m-%d")
+        try:
+            cur.execute("""
+                SELECT bus, fecha, COALESCE(dias, 1) FROM dt_rebalanceo
+                WHERE fecha < %s
+                ORDER BY fecha
+            """, (lunes_str_week,))
+            prev_dts = cur.fetchall()
+        except Exception:
+            conn.rollback()
+            prev_dts = []
+        for bus, fecha_dt, n_dias in prev_dts:
+            tarifa = _get_tarifa_bus(fecha_dt.strftime("%Y-%m-%d"), bus)
+            if tarifa <= 0:
+                continue
+            cursor_date = fecha_dt + timedelta(days=1)
+            count = 0
+            while count < n_dias:
+                if cursor_date.weekday() < 5:
+                    dt_fecha = cursor_date.strftime("%Y-%m-%d")
+                    if dt_fecha >= lunes_str_week and dt_fecha <= viernes_str_week:
+                        dt_activos.append({"bus": bus, "tarifa": round(tarifa, 2), "fecha_efecto": dt_fecha})
+                    count += 1
+                cursor_date += timedelta(days=1)
+
+
+
 
         for dia in dias_semana:
             dia_str = dia.strftime("%Y-%m-%d")
@@ -2074,15 +2223,18 @@ def ahorros_semanal(req: AhorroSemanalRequest):
             else:
                 dia_sig = (dia + timedelta(days=1)).strftime("%Y-%m-%d")
 
-            # Total tarifa of all buses for this day (sin optimizar)
+            # Tarifa real del dia (suma de tarifas de buses que operaron ese dia)
             cur.execute(f"""
                 SELECT COALESCE(SUM("TARIFA"::numeric), 0) FROM (
-                    SELECT "TARIFA", "FECHA" FROM rpt_controlbus_viajes_aq1
+                    SELECT "TARIFA", "FECHA", "DENOMINACION CECO" FROM rpt_controlbus_viajes_aq1
                     UNION ALL
-                    SELECT "TARIFA", "FECHA" FROM rpt_controlbus_viajes_aq2
-                ) v WHERE "FECHA" = '{dia_str}'
+                    SELECT "TARIFA", "FECHA", "DENOMINACION CECO" FROM rpt_controlbus_viajes_aq2
+                ) v WHERE "FECHA" = '{dia_str}' {den_filter}
             """)
-            tarifa_total_dia = float(cur.fetchone()[0])
+            tarifa_real_dia = float(cur.fetchone()[0])
+
+            tiene_data = tarifa_real_dia > 0
+            tarifa_total_dia = tarifa_base_lunes if tiene_data else 0
 
             # Get new ejecutados (bajas) for this day
             cur.execute("""
@@ -2101,10 +2253,44 @@ def ahorros_semanal(req: AhorroSemanalRequest):
             for u in unificaciones_dia:
                 buses_unificados.update(b.strip().upper() for b in u["buses_origen"])
 
-            # Bajas puras (ejecutados que NO son parte de unificacion)
+            # Get DT buses for this day (new DTs registered on this day)
+            try:
+                cur.execute("SELECT bus, COALESCE(dias, 1) FROM dt_rebalanceo WHERE fecha = %s", (dia_str,))
+            except Exception:
+                conn.rollback()
+                cur.execute("SELECT bus FROM dt_rebalanceo WHERE fecha = %s", (dia_str,))
+                dt_dia_raw = [(r[0], 1) for r in cur.fetchall()]
+            else:
+                dt_dia_raw = cur.fetchall()
+            dt_dia = [r[0] for r in dt_dia_raw]
+            dt_dias_map = {r[0]: r[1] for r in dt_dia_raw}
+
+            # Bajas puras (ejecutados que NO son parte de unificacion ni DT)
             bajas_puras = [b for b in ejecutados_dia if b not in buses_unificados]
 
             detalle_dia = []
+
+            # DT buses: new DTs for this day
+            for bus in dt_dia:
+                tarifa = _get_tarifa_bus(dia_str, bus)
+                n_dias = dt_dias_map.get(bus, 1)
+                detalle_dia.append({
+                    "tipo": "dt",
+                    "bus": bus,
+                    "tarifa_original": round(tarifa, 2),
+                    "tarifa_nueva": 0,
+                    "ahorro": 0,
+                    "dias_dt": n_dias,
+                })
+                # Calculate N business days forward (skip weekends, stay within Mon-Fri week)
+                dt_dates = []
+                cursor_date = dia + timedelta(days=1)
+                while len(dt_dates) < n_dias:
+                    if cursor_date.weekday() < 5:  # Mon-Fri
+                        dt_dates.append(cursor_date.strftime("%Y-%m-%d"))
+                    cursor_date += timedelta(days=1)
+                for dt_date in dt_dates:
+                    dt_activos.append({"bus": bus, "tarifa": round(tarifa, 2), "fecha_efecto": dt_date})
 
             # Calculate savings from bajas
             for bus in bajas_puras:
@@ -2163,6 +2349,25 @@ def ahorros_semanal(req: AhorroSemanalRequest):
             ahorro_dia_total = ahorro_activo
             ahorro_acumulado += ahorro_dia_total
 
+            # Kilos exportacion del dia
+            kilos_dia = 0
+            if has_zupra:
+                try:
+                    zupra_cur.execute("""
+                        SELECT COALESCE(SUM(COALESCE(kilos, 0)), 0)
+                        FROM raw.all_recepciones
+                        WHERE pais_origen_fuente = 'Peru'
+                          AND fecha_recepcion::date = %s
+                          AND LOWER(desc_tipo_fruta) = 'exportacion'
+                    """, (dia_str,))
+                    kilos_dia = float(zupra_cur.fetchone()[0])
+                except Exception:
+                    kilos_dia = 0
+            soles_por_kg_dia = round(tarifa_real_dia / kilos_dia, 4) if kilos_dia > 0 else 0
+
+            # DT acumulado: solo DTs de dias previos (desde <= hoy), no los nuevos del dia
+            tarifa_dt_dia = sum(dt["tarifa"] for dt in dt_activos if dt["fecha_efecto"] == dia_str)
+
             resultado_dias.append({
                 "fecha": dia_str,
                 "dia": ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"][dia.weekday()],
@@ -2173,9 +2378,20 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                 "ahorro_acumulado": round(ahorro_acumulado, 2),
                 "tarifa_total": round(tarifa_total_dia, 2),
                 "tarifa_optimizada": round(tarifa_total_dia - ahorro_dia_total, 2),
+                "tarifa_dt": round(tarifa_dt_dia, 2),
+                "tiene_data": tiene_data,
+                "kilos_export": round(kilos_dia, 2),
+                "tarifa_real_dia": round(tarifa_real_dia, 2),
+                "soles_por_kg": soles_por_kg_dia,
             })
 
         conn.close()
+        if has_zupra:
+            try:
+                zupra_cur.close()
+                zupra_conn.close()
+            except Exception:
+                pass
         return {
             "semana": req.fecha_inicio,
             "dias": resultado_dias,

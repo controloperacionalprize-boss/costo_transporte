@@ -5,7 +5,7 @@ import 'ag-grid-community/styles/ag-theme-alpine.css';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, CircleMarker, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Bar, BarChart, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Line, Legend, AreaChart, Area, ComposedChart } from 'recharts';
+import { Bar, BarChart, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Line, Legend, AreaChart, Area, ComposedChart, Cell } from 'recharts';
 
 const SESSION_ID = crypto.randomUUID();
 
@@ -159,11 +159,14 @@ function Sidebar({ dbStatus, setDbStatus, onDataLoaded, activeTab, setActiveTab,
 
   const autoLoaded = useRef(false);
 
+  const filtersLoaded = useRef(false);
   useEffect(() => {
+    if (filtersLoaded.current) return;
+    filtersLoaded.current = true;
     api('/api/db/filters').then(d => {
       setEmpresas(d.empresas || []);
       setFechasDisp(d.fechas || []);
-      if (d.fechas?.length) setFecha(d.fechas[0]);
+      if (d.fechas?.length) setFecha(prev => prev || d.fechas[0]);
       return d;
     }).catch(() => {});
     api('/api/db/denominaciones').then(d => setDenominaciones(d.denominaciones || [])).catch(() => {});
@@ -885,6 +888,9 @@ export default function App() {
   const [selectedBuses, setSelectedBuses] = useState(new Set());
   const [ejecutados, setEjecutados] = useState({});
   const [busesEjecutados, setBusesEjecutados] = useState(new Set());
+  const [busesDT, setBusesDT] = useState(new Set());
+  const [actionLoading, setActionLoading] = useState(false);
+  const gridRef = useRef(null);
   const [busesProgramados, setBusesProgramados] = useState(new Set());
   const [unificaciones, setUnificaciones] = useState([]);
   const [showUnificarModal, setShowUnificarModal] = useState(false);
@@ -913,6 +919,8 @@ export default function App() {
 
   const [intercambios, setIntercambios] = useState([]);
   const [showIntercambioModal, setShowIntercambioModal] = useState(false);
+  const [showDTModal, setShowDTModal] = useState(false);
+  const [dtDias, setDtDias] = useState(1);
   const [intercambioPlacaOriginal, setIntercambioPlacaOriginal] = useState('');
   const [intercambioPlacaNueva, setIntercambioPlacaNueva] = useState('');
 
@@ -1198,11 +1206,13 @@ export default function App() {
       valueGetter: params => {
         const bus = params.data?.BUS;
         if (busesEjecutados.has(bus)) return 'Ejecutado';
+        if (busesDT.has(bus)) return 'DT';
         if (busesProgramados.has(bus)) return 'Sugerido';
         return '';
       },
       cellRenderer: params => {
         if (params.value === 'Ejecutado') return React.createElement('span', { style: { background: '#dcfce7', color: '#16a34a', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, '✓ Ejecutado');
+        if (params.value === 'DT') return React.createElement('span', { style: { background: '#e0e7ff', color: '#4338ca', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, 'DT');
         if (params.value === 'Sugerido') return React.createElement('span', { style: { background: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600 } }, 'Sugerido');
         return null;
       },
@@ -1265,7 +1275,7 @@ export default function App() {
       };
     })];
     return cols;
-  }, [cruce, routeDistances, busesEjecutados, busesProgramados]);
+  }, [cruce, routeDistances, busesEjecutados, busesDT, busesProgramados]);
 
   const detailColumns = useMemo(() => [
     {
@@ -1331,6 +1341,7 @@ export default function App() {
 
   const guardarUnificacion = async (placaDestino) => {
     if (selectedBuses.size === 0 || !placaDestino) return;
+    setActionLoading(true);
     const busesOrigen = [...selectedBuses];
     try {
       const res = await api('/api/unificaciones', {
@@ -1354,12 +1365,14 @@ export default function App() {
         setShowUnificarModal(false);
         setUnificarPlaca('');
         setSelectedBuses(new Set());
+        gridRef.current?.api?.deselectAll();
       }
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) { alert('Error: ' + e.message); } finally { setActionLoading(false); }
   };
 
   const darDeBaja = async () => {
     if (selectedBuses.size === 0) return;
+    setActionLoading(true);
     const buses = [...selectedBuses];
     try {
       await api('/api/ejecutados', {
@@ -1373,11 +1386,39 @@ export default function App() {
         return next;
       });
       setSelectedBuses(new Set());
-    } catch (e) { alert('Error: ' + e.message); }
+        gridRef.current?.api?.deselectAll();
+    } catch (e) { alert('Error: ' + e.message); } finally { setActionLoading(false); }
+  };
+
+  const darDT = () => {
+    if (selectedBuses.size === 0) return;
+    setDtDias(1);
+    setShowDTModal(true);
+  };
+
+  const confirmarDT = async () => {
+    setShowDTModal(false);
+    setActionLoading(true);
+    const buses = [...selectedBuses];
+    try {
+      await api('/api/dt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: SESSION_ID, buses, fecha: dbStatus?.fecha || '', empresa: dbStatus?.empresa || '', denominacion: dbStatus?.denominacion || '', dias: dtDias }),
+      });
+      setBusesDT(prev => {
+        const next = new Set(prev);
+        buses.forEach(b => next.add(b));
+        return next;
+      });
+      setSelectedBuses(new Set());
+      gridRef.current?.api?.deselectAll();
+    } catch (e) { alert('Error: ' + e.message); } finally { setActionLoading(false); }
   };
 
   const guardarIntercambio = async () => {
     if (!intercambioPlacaOriginal || !intercambioPlacaNueva) return;
+    setActionLoading(true);
     const busOriginal = cruce.find(r => r.BUS === intercambioPlacaOriginal.toUpperCase());
     const tarifaOriginal = busOriginal ? (busOriginal.TARIFA || 0) : 0;
     try {
@@ -1399,8 +1440,9 @@ export default function App() {
         setIntercambioPlacaOriginal('');
         setIntercambioPlacaNueva('');
         setSelectedBuses(new Set());
+        gridRef.current?.api?.deselectAll();
       }
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) { alert('Error: ' + e.message); } finally { setActionLoading(false); }
   };
 
   const eliminarIntercambio = async (id) => {
@@ -1421,10 +1463,11 @@ export default function App() {
     const f = fechaOverride || dbStatus?.fecha;
     if (!f) return;
     try {
-      const [resUnif, resEjec, resInter] = await Promise.all([
+      const [resUnif, resEjec, resInter, resDT] = await Promise.all([
         api(`/api/unificaciones?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
         api(`/api/ejecutados?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}`),
         api(`/api/intercambios?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
+        api(`/api/dt?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}`),
       ]);
       setUnificaciones(resUnif.unificaciones || []);
       setIntercambios(resInter.intercambios || []);
@@ -1433,6 +1476,7 @@ export default function App() {
         ...(resEjec.ejecutados_db || []),
       ]);
       setBusesEjecutados(ejec);
+      setBusesDT(new Set(resDT.dt_buses_db || []));
     } catch {}
   };
 
@@ -1508,37 +1552,6 @@ export default function App() {
           </section>
         )}
 
-        {activeTab === 'cosecha' && kilosExport && (
-          <section style={{ margin: '12px 0', padding: 16, background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <i className="fa-solid fa-weight-hanging" style={{ color: '#6366f1', fontSize: 18 }} />
-                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>Kilos Export:</span>
-                <span style={{ fontWeight: 700, fontSize: 16, color: '#111' }}>{kilosExport.kilos?.toLocaleString(undefined, {minimumFractionDigits:2})} kg</span>
-              </div>
-              <div style={{ width: 1, height: 28, background: '#d1d5db' }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <i className="fa-solid fa-coins" style={{ color: '#d97706', fontSize: 18 }} />
-                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>Tarifa Total:</span>
-                <span style={{ fontWeight: 700, fontSize: 16, color: '#111' }}>S/{kilosExport.tarifa_total?.toLocaleString(undefined, {minimumFractionDigits:2})}</span>
-              </div>
-              <div style={{ width: 1, height: 28, background: '#d1d5db' }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <i className="fa-solid fa-tag" style={{ color: '#059669', fontSize: 18 }} />
-                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>S//kg:</span>
-                <span style={{ fontWeight: 700, fontSize: 16, color: '#059669' }}>{kilosExport.soles_por_kg?.toFixed(4)}</span>
-              </div>
-              <div style={{ width: 1, height: 28, background: '#d1d5db' }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <i className="fa-solid fa-dollar-sign" style={{ color: '#2563eb', fontSize: 18 }} />
-                <span style={{ fontWeight: 700, fontSize: 14, color: '#374151' }}>$/kg:</span>
-                <span style={{ fontWeight: 700, fontSize: 16, color: '#2563eb' }}>{kilosExport.kilos > 0 ? ((kilosExport.tarifa_total / tipoCambio) / kilosExport.kilos).toFixed(4) : '0'}</span>
-                <span style={{ fontSize: 12, color: '#6b7280', marginLeft: 4 }}>T.C:</span>
-                <input type="number" step="0.01" value={tipoCambio} onChange={e => setTipoCambio(parseFloat(e.target.value) || 1)} style={{ width: 60, padding: '2px 6px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, fontWeight: 600 }} />
-              </div>
-            </div>
-          </section>
-        )}
 
         {activeTab === 'cosecha' && cruce.length > 0 && (() => {
           const sectorStats = {};
@@ -1695,6 +1708,7 @@ export default function App() {
               </div>
               <div className="ag-theme-alpine grid-container">
                 <AgGridReact
+                  ref={gridRef}
                   rowData={filteredCruce}
                   columnDefs={cruceColumns}
                   defaultColDef={{ resizable: true, sortable: true, filter: true }}
@@ -1738,7 +1752,7 @@ export default function App() {
                   />
                   <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                     <button onClick={() => setShowUnificarModal(false)} className="btn" style={{ background: '#f1f5f9', color: '#334155' }}>Cancelar</button>
-                    <button onClick={() => guardarUnificacion(unificarPlaca)} disabled={!unificarPlaca.trim()} className="btn" style={{ background: '#7c3aed', color: '#fff', border: 'none', opacity: unificarPlaca.trim() ? 1 : 0.5 }}>
+                    <button onClick={() => guardarUnificacion(unificarPlaca)} disabled={!unificarPlaca.trim() || actionLoading} className="btn" style={{ background: '#7c3aed', color: '#fff', border: 'none', opacity: (unificarPlaca.trim() && !actionLoading) ? 1 : 0.5 }}>
                       <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Guardar
                     </button>
                   </div>
@@ -1765,8 +1779,39 @@ export default function App() {
                   />
                   <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                     <button onClick={() => setShowIntercambioModal(false)} className="btn" style={{ background: '#f1f5f9', color: '#334155' }}>Cancelar</button>
-                    <button onClick={guardarIntercambio} disabled={!intercambioPlacaNueva.trim()} className="btn" style={{ background: '#2563eb', color: '#fff', border: 'none', opacity: intercambioPlacaNueva.trim() ? 1 : 0.5 }}>
+                    <button onClick={guardarIntercambio} disabled={!intercambioPlacaNueva.trim() || actionLoading} className="btn" style={{ background: '#2563eb', color: '#fff', border: 'none', opacity: (intercambioPlacaNueva.trim() && !actionLoading) ? 1 : 0.5 }}>
                       <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Guardar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {showDTModal && (
+              <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowDTModal(false)}>
+                <div style={{ background: '#fff', borderRadius: 12, width: '90%', maxWidth: 400, padding: 24, position: 'relative' }} onClick={e => e.stopPropagation()}>
+                  <button onClick={() => setShowDTModal(false)} style={{ position: 'absolute', top: 12, right: 16, background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: '#64748b' }}>x</button>
+                  <h3 style={{ margin: '0 0 16px' }}><i className="fa-solid fa-wrench" style={{ marginRight: 8, color: '#4338ca' }} />Descanso Tecnico</h3>
+                  <p style={{ fontSize: 13, color: '#64748b', marginBottom: 12 }}>
+                    Buses seleccionados: <b>{selectedBuses.size}</b> ({[...selectedBuses].join(', ')})
+                  </p>
+                  <label style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, display: 'block' }}>Dias de DT:</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={dtDias}
+                    onChange={e => setDtDias(Math.max(1, parseInt(e.target.value) || 1))}
+                    style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14, marginBottom: 16 }}
+                  />
+                  <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
+                    <i className="fa-solid fa-info-circle" style={{ marginRight: 4 }} />
+                    El DT se aplica a partir del siguiente dia habil por {dtDias} dia{dtDias > 1 ? 's' : ''} (salta fines de semana).
+                  </p>
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <button onClick={() => setShowDTModal(false)} className="btn" style={{ background: '#f1f5f9', color: '#334155' }}>Cancelar</button>
+                    <button onClick={confirmarDT} className="btn" style={{ background: '#4338ca', color: '#fff', border: 'none' }}>
+                      <i className="fa-solid fa-check" style={{ marginRight: 4 }} />Confirmar DT
                     </button>
                   </div>
                 </div>
@@ -1840,10 +1885,16 @@ export default function App() {
                     </button>
                   )}
                   {selectedBuses.size > 0 && (
-                    <button onClick={darDeBaja} className="btn" style={{ background: '#dc2626', color: '#fff', border: 'none' }}>
-                      <i className="fa-solid fa-ban" style={{ marginRight: 4 }} />
-                      Dar de Baja ({selectedBuses.size})
-                    </button>
+                    <>
+                      <button onClick={darDeBaja} disabled={actionLoading} className="btn" style={{ background: '#dc2626', color: '#fff', border: 'none', opacity: actionLoading ? 0.6 : 1 }}>
+                        {actionLoading ? <i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} /> : <i className="fa-solid fa-ban" style={{ marginRight: 4 }} />}
+                        Dar de Baja ({selectedBuses.size})
+                      </button>
+                      <button onClick={darDT} disabled={actionLoading} className="btn" style={{ background: '#4338ca', color: '#fff', border: 'none', opacity: actionLoading ? 0.6 : 1 }}>
+                        {actionLoading ? <i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} /> : <i className="fa-solid fa-wrench" style={{ marginRight: 4 }} />}
+                        DT ({selectedBuses.size})
+                      </button>
+                    </>
                   )}
                 </div>
                 {(busesProgramados.size > 0 || unificaciones.length > 0 || busesEjecutados.size > 0) && (
@@ -1856,6 +1907,12 @@ export default function App() {
                       <i className="fa-solid fa-compress" style={{ marginRight: 4 }} />
                       Unificados: {unificaciones.length}
                     </span>
+                    {busesDT.size > 0 && (
+                      <span style={{ color: '#4338ca', fontWeight: 600 }}>
+                        <i className="fa-solid fa-wrench" style={{ marginRight: 4 }} />
+                        DT: {busesDT.size}
+                      </span>
+                    )}
                     {busesEjecutados.size > 0 && (
                       <span style={{ color: '#dc2626', fontWeight: 600 }}>
                         <i className="fa-solid fa-ban" style={{ marginRight: 4 }} />
@@ -2108,10 +2165,14 @@ export default function App() {
                               <th>Día</th>
                               <th>Fecha</th>
                               <th>Nuevas Acciones</th>
+                              <th>Costo Sin Optimizar</th>
+                              <th>Costo Con Optimizar</th>
+                              <th>Diferencia</th>
                               <th>Ahorro Nuevo</th>
                               <th>Ahorro Previo</th>
                               <th>Ahorro del Día</th>
                               <th>Acumulado</th>
+                              <th>$/kg</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2122,13 +2183,24 @@ export default function App() {
                                 <td>
                                   {d.nuevas_acciones?.length > 0 ? d.nuevas_acciones.map((a, j) => (
                                     <div key={j} style={{ fontSize: 11, marginBottom: 2 }}>
-                                      {a.tipo === 'baja' ? (
+                                      {a.tipo === 'dt' ? (
+                                        <span><span style={{ color: '#4338ca', fontWeight: 600 }}>DT:</span> {a.bus} (S/{a.tarifa_original}) — {a.dias_dt || 1} dia{(a.dias_dt || 1) > 1 ? 's' : ''}</span>
+                                      ) : a.tipo === 'baja' ? (
                                         <span><span style={{ color: '#dc2626', fontWeight: 600 }}>Baja:</span> {a.bus} (S/{a.tarifa_original})</span>
                                       ) : (
                                         <span><span style={{ color: '#7c3aed', fontWeight: 600 }}>Unif:</span> {a.buses_origen?.join(', ')} → {a.placa_destino} (S/{a.tarifa_original} → S/{a.tarifa_nueva})</span>
                                       )}
                                     </div>
                                   )) : <span style={{ color: 'var(--text-dim)' }}>—</span>}
+                                </td>
+                                <td style={{ color: 'var(--text)' }}>
+                                  {d.tarifa_total > 0 ? `S/${d.tarifa_total.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
+                                </td>
+                                <td style={{ fontWeight: 600, color: '#3b82f6' }}>
+                                  {d.tarifa_optimizada > 0 ? `S/${d.tarifa_optimizada.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
+                                </td>
+                                <td style={{ fontWeight: 700, color: (d.tarifa_total - (d.tarifa_optimizada || 0)) > 0 ? '#059669' : 'var(--text-dim)' }}>
+                                  S/{((d.tarifa_total || 0) - (d.tarifa_optimizada || 0)).toLocaleString(undefined, {minimumFractionDigits:2})}
                                 </td>
                                 <td style={{ fontWeight: 600, color: d.ahorro_nuevo > 0 ? '#059669' : 'var(--text-dim)' }}>
                                   {d.ahorro_nuevo > 0 ? `S/${d.ahorro_nuevo.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
@@ -2142,6 +2214,9 @@ export default function App() {
                                 <td style={{ fontWeight: 800, color: '#059669', fontSize: 13 }}>
                                   S/{d.ahorro_acumulado.toLocaleString(undefined, {minimumFractionDigits:2})}
                                 </td>
+                                <td style={{ fontWeight: 600, color: '#f59e0b' }}>
+                                  {d.soles_por_kg ? `$${(d.soles_por_kg / tipoCambio).toFixed(2)}` : '—'}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
@@ -2149,54 +2224,102 @@ export default function App() {
                       </div>
 
                       {/* Chart: Tarifa sin optimizar vs con optimizacion */}
-                      {ahorrosSemanal.dias?.some(d => d.tarifa_total > 0) && (() => {
-                        const chartData = ahorrosSemanal.dias.map(d => ({
-                          dia: d.dia,
-                          sinOpt: d.tarifa_total,
-                          conOpt: d.tarifa_optimizada,
-                          diff: d.tarifa_total - d.tarifa_optimizada,
-                        }));
+                      {ahorrosSemanal.dias?.some(d => d.tiene_data) && (() => {
+                        const diasConData = ahorrosSemanal.dias.filter(d => d.tiene_data);
+                        const totalKilos = diasConData.reduce((s, d) => s + (d.kilos_export || 0), 0);
+                        const totalTarifaReal = diasConData.reduce((s, d) => s + (d.tarifa_real_dia || d.tarifa_total || 0), 0);
+                        const dolarKgTotal = totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0;
+                        const sumDolarKg = diasConData.reduce((s, d) => s + (d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0), 0);
+                        const maxDailyDk = Math.max(...diasConData.map(d => d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0));
+                        const rightMax = Math.round(maxDailyDk * 150) / 100;
+                        const chartData = [
+                          ...diasConData.map(d => ({
+                            dia: d.dia,
+                            sinOpt: d.tarifa_total,
+                            conOpt: d.tarifa_optimizada,
+                            diff: d.tarifa_total - d.tarifa_optimizada,
+                            dt: d.tarifa_dt || 0,
+                            dolarKg: d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0,
+                          })),
+                          { dia: 'Total', sinOpt: 0, conOpt: 0, diff: 0, dolarKgBar: sumDolarKg, dolarKgProm: totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0 },
+                        ];
                         const fmtK = v => Math.round(v).toLocaleString();
-                        const CustomLabel = ({ x, y, width, value, fill }) => (
-                          <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={10} fontWeight={700} fill={fill}>{fmtK(value)}</text>
-                        );
+                        const CustomLabel = ({ x, y, width, height, value }) => {
+                          if (!value) return null;
+                          const cx = x + width / 2;
+                          if (height < 50) {
+                            return <text x={cx} y={y - 6} textAnchor="start" fontSize={8} fontWeight={600} fill="#374151" transform={`rotate(-90, ${cx}, ${y - 6})`}>S/.{fmtK(value)}</text>;
+                          }
+                          const cy = y + height / 2;
+                          return <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={9} fontWeight={700} fill="#fff" transform={`rotate(-90, ${cx}, ${cy})`}>S/.{fmtK(value)}</text>;
+                        };
                         const DiffLabel = (props) => {
                           const { x, y, width, index } = props;
                           const d = chartData[index];
-                          if (!d || d.diff === 0) return null;
+                          if (!d) return null;
+                          if (d.diff === 0) return (
+                            <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize={11} fontWeight={700} fill="#9ca3af">S/0</text>
+                          );
                           const isPos = d.diff > 0;
-                          const label = `${isPos ? '+' : '-'}${fmtK(Math.abs(d.diff))}`;
                           return (
                             <text x={x + width / 2} y={y - 8} textAnchor="middle" fontSize={11} fontWeight={700} fill={isPos ? '#16a34a' : '#dc2626'}>
-                              {label} {isPos ? '↑' : '↓'}
+                              +{fmtK(Math.abs(d.diff))} ↑
                             </text>
                           );
                         };
                         return (
                         <div style={{ marginTop: 24 }}>
-                          <h4 style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--text-secondary)' }}>
-                            <i className="fa-solid fa-chart-column" style={{ marginRight: 6 }} />
-                            Comparativo de Tarifa Semanal
-                          </h4>
-                          <ResponsiveContainer width="100%" height={350}>
-                            <BarChart data={chartData} barGap={4} barCategoryGap="25%" margin={{ top: 25, right: 10, left: 10, bottom: 5 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <h4 style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
+                              <i className="fa-solid fa-chart-column" style={{ marginRight: 6 }} />
+                              Comparativo de Tarifa Semanal
+                            </h4>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                              <span style={{ color: '#6b7280' }}>T.C:</span>
+                              <input type="number" step="0.01" value={tipoCambio} onChange={e => setTipoCambio(parseFloat(e.target.value) || 1)} style={{ width: 60, padding: '2px 6px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 12, fontWeight: 600 }} />
+                            </div>
+                          </div>
+                          <ResponsiveContainer width="100%" height={400}>
+                            <ComposedChart data={chartData} barGap={2} barCategoryGap="25%" margin={{ top: 15, right: 50, left: 10, bottom: 5 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                               <XAxis dataKey="dia" tick={{ fontSize: 12, fontWeight: 600 }} axisLine={false} tickLine={false} />
-                              <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `S/${fmtK(v)}`} axisLine={false} tickLine={false} />
+                              <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={v => `S/${fmtK(v)}`} axisLine={false} tickLine={false} />
+                              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickFormatter={v => `$${v.toFixed(2)}`} axisLine={false} tickLine={false} domain={[0, rightMax]} />
+                              <YAxis yAxisId="rightBar" orientation="right" hide={true} />
                               <RTooltip
-                                formatter={(v, name) => [`S/${v.toLocaleString(undefined, {minimumFractionDigits:2})}`, name === 'sinOpt' ? 'Sin optimizar' : 'Con optimizacion']}
+                                formatter={(v, name) => {
+                                  if (name === 'dolarKg') return [`$${v.toFixed(4)}`, '$/kg diario'];
+                                  if (name === 'dolarKgBar') return [`$${v.toFixed(4)}`, 'Sum $/kg'];
+                                  if (name === 'dolarKgProm') return [`$${v.toFixed(2)}`, '$/kg (Tarifa/Kilos)'];
+                                  return [`S/${v.toLocaleString(undefined, {minimumFractionDigits:2})}`, name === 'sinOpt' ? 'Sin optimizar' : name === 'conOpt' ? 'Con optimizacion' : name === 'dt' ? 'DT' : 'Ahorro'];
+                                }}
                                 labelFormatter={l => l}
                                 contentStyle={{ borderRadius: 8, fontSize: 12, border: '1px solid var(--border)' }}
                               />
-                              <Legend formatter={v => v === 'sinOpt' ? 'Sin optimizar' : 'Con optimizacion'} wrapperStyle={{ fontSize: 12 }} />
-                              <Bar dataKey="sinOpt" fill="#3b82f6" radius={[6,6,0,0]} label={<CustomLabel fill="#3b82f6" />} />
-                              <Bar dataKey="conOpt" fill="#22c55e" radius={[6,6,0,0]} label={<DiffLabel />}>
-                              </Bar>
-                            </BarChart>
+                              <Legend formatter={v => v === 'sinOpt' ? 'Sin optimizar' : v === 'conOpt' ? 'Con optimizacion' : v === 'dt' ? 'DT' : v === 'dolarKg' ? '$/kg diario' : v === 'dolarKgBar' ? 'Sum $/kg' : v === 'dolarKgProm' ? '$/kg (Tarifa/Kilos)' : 'Ahorro'} wrapperStyle={{ fontSize: 12 }} />
+                              <Bar yAxisId="left" dataKey="sinOpt" fill="#ef4444" radius={[6,6,0,0]} label={<CustomLabel fill="#ef4444" />} />
+                              <Bar yAxisId="left" dataKey="conOpt" fill="#3b82f6" radius={[6,6,0,0]} label={<CustomLabel fill="#3b82f6" />} />
+                              <Bar yAxisId="left" dataKey="diff" fill="#22c55e" radius={[6,6,0,0]} label={<CustomLabel fill="#22c55e" />} />
+                              <Bar yAxisId="left" dataKey="dt" fill="#4338ca" radius={[6,6,0,0]} label={<CustomLabel fill="#4338ca" />} />
+                              <Line yAxisId="right" type="monotone" dataKey="dolarKg" stroke="#f59e0b" strokeWidth={2} dot={{ r: 5, fill: '#f59e0b' }} label={{ fontSize: 10, fontWeight: 700, fill: '#f59e0b', formatter: v => v ? `$${v.toFixed(2)}` : '', position: 'top' }} connectNulls={false} />
+                              <Bar yAxisId="rightBar" dataKey="dolarKgBar" fill="#f59e0b" radius={[6,6,0,0]} label={({ x, y, width, height, value }) => {
+                                if (!value) return null;
+                                const cx = x + width / 2;
+                                const cy = y + height / 2;
+                                return <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={11} fontWeight={700} fill="#fff" transform={`rotate(-90, ${cx}, ${cy})`}>${value.toFixed(2)}</text>;
+                              }} />
+                              <Bar yAxisId="rightBar" dataKey="dolarKgProm" fill="#9333ea" radius={[6,6,0,0]} label={({ x, y, width, height, value }) => {
+                                if (!value) return null;
+                                const cx = x + width / 2;
+                                const cy = y + height / 2;
+                                return <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={11} fontWeight={700} fill="#fff" transform={`rotate(-90, ${cx}, ${cy})`}>${value.toFixed(2)}</text>;
+                              }} />
+                            </ComposedChart>
                           </ResponsiveContainer>
                         </div>
                         );
                       })()}
+
                     </div>
                   )}
                 </div>
