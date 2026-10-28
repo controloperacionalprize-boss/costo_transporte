@@ -2144,6 +2144,7 @@ def ahorros_semanal(req: AhorroSemanalRequest):
 
         _ensure_ejecuciones_table()
         _ensure_dt_table()
+        _ensure_intercambios_table()
 
         conn = _get_db_conn()
         cur = conn.cursor()
@@ -2234,7 +2235,7 @@ def ahorros_semanal(req: AhorroSemanalRequest):
             tarifa_real_dia = float(cur.fetchone()[0])
 
             tiene_data = tarifa_real_dia > 0
-            tarifa_total_dia = tarifa_base_lunes if tiene_data else 0
+            tarifa_total_dia = tarifa_real_dia if tiene_data else 0
 
             # Get new ejecutados (bajas) for this day
             cur.execute("""
@@ -2323,7 +2324,6 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                 acciones_activas.append({"tipo": "unificacion", "buses": [b.strip().upper() for b in u["buses_origen"]], "placa_destino": u["placa_destino"], "ahorro_diario": round(ahorro, 2), "desde": dia_sig})
 
             # Calculate savings from intercambios
-            _ensure_intercambios_table()
             cur.execute("""
                 SELECT placa_original, placa_nueva, tarifa_original FROM intercambios_rebalanceo WHERE fecha = %s
             """, (dia_str,))
@@ -2377,7 +2377,7 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                 "ahorro_dia": round(ahorro_dia_total, 2),
                 "ahorro_acumulado": round(ahorro_acumulado, 2),
                 "tarifa_total": round(tarifa_total_dia, 2),
-                "tarifa_optimizada": round(tarifa_total_dia - ahorro_dia_total, 2),
+                "tarifa_optimizada": round(tarifa_real_dia - ahorro_dia_total, 2) if tiene_data else 0,
                 "tarifa_dt": round(tarifa_dt_dia, 2),
                 "tiene_data": tiene_data,
                 "kilos_export": round(kilos_dia, 2),

@@ -896,7 +896,9 @@ export default function App() {
   const [showUnificarModal, setShowUnificarModal] = useState(false);
   const [unificarPlaca, setUnificarPlaca] = useState('');
   const [ahorrosSemanal, setAhorrosSemanal] = useState(null);
+  const [semanasSeleccionadas, setSemanasSeleccionadas] = useState([]);
   const [ahorrosLoading, setAhorrosLoading] = useState(false);
+  const [showSemanasDropdown, setShowSemanasDropdown] = useState(false);
   const [rutasData, setRutasData] = useState(null);
   const [routeDistances, setRouteDistances] = useState(null);
 
@@ -1480,22 +1482,57 @@ export default function App() {
     } catch {}
   };
 
+  const getSemanasDisponibles = () => {
+    const semanas = [];
+    const hoy = new Date();
+    hoy.setHours(12, 0, 0, 0);
+    const dayOfWeek = hoy.getDay();
+    const diffToMon = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const lunesActual = new Date(hoy);
+    lunesActual.setDate(hoy.getDate() - diffToMon);
+    for (let i = 0; i < 12; i++) {
+      const lun = new Date(lunesActual);
+      lun.setDate(lunesActual.getDate() - i * 7);
+      const vie = new Date(lun);
+      vie.setDate(lun.getDate() + 4);
+      const lunesStr = lun.toISOString().split('T')[0];
+      const label = `${lun.getDate().toString().padStart(2,'0')}/${(lun.getMonth()+1).toString().padStart(2,'0')} - ${vie.getDate().toString().padStart(2,'0')}/${(vie.getMonth()+1).toString().padStart(2,'0')}`;
+      semanas.push({ value: lunesStr, label });
+    }
+    return semanas;
+  };
+
   const loadAhorrosSemanal = async () => {
     if (!dbStatus?.fecha) return;
-    setAhorrosLoading(true);
-    try {
+    let semanas = semanasSeleccionadas;
+    if (semanas.length === 0) {
       const d = new Date(dbStatus.fecha + 'T12:00:00');
       const dayOfWeek = d.getDay();
       const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
       const lunes = new Date(d);
       lunes.setDate(d.getDate() - diff);
-      const lunesStr = lunes.toISOString().split('T')[0];
-      const res = await api('/api/ahorros/semanal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fecha_inicio: lunesStr, denominacion: dbStatus?.denominacion || '' }),
-      });
-      setAhorrosSemanal(res);
+      semanas = [lunes.toISOString().split('T')[0]];
+    }
+    setAhorrosLoading(true);
+    try {
+      const resultados = await Promise.all(semanas.map(lunesStr =>
+        api('/api/ahorros/semanal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fecha_inicio: lunesStr, denominacion: dbStatus?.denominacion || '' }),
+        })
+      ));
+      if (resultados.length === 1) {
+        setAhorrosSemanal(resultados[0]);
+      } else {
+        const merged = {
+          ahorro_total_semanal: resultados.reduce((s, r) => s + (r.ahorro_total_semanal || 0), 0),
+          total_acciones: resultados.reduce((s, r) => s + (r.total_acciones || 0), 0),
+          dias: resultados.flatMap(r => r.dias || []).sort((a, b) => (a.fecha || '').localeCompare(b.fecha || '')),
+          semanas: resultados.length,
+        };
+        setAhorrosSemanal(merged);
+      }
     } catch (e) { alert('Error: ' + e.message); }
     setAhorrosLoading(false);
   };
@@ -2138,11 +2175,52 @@ export default function App() {
               {/* ── Reporte de Ahorros Semanal ── */}
               {rebalanceo && (
                 <div style={{ marginTop: 24, padding: 20, background: 'var(--bg-card)', borderRadius: 12, border: '1.5px solid #059669' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <h3 style={{ margin: 0, color: '#059669' }}><i className="fa-solid fa-piggy-bank" style={{ marginRight: 8 }} />Reporte de Ahorros Semanal</h3>
-                    <button onClick={loadAhorrosSemanal} disabled={ahorrosLoading} className="btn btn-primary" style={{ fontSize: 13, background: '#059669', border: 'none' }}>
-                      {ahorrosLoading ? <><span className="spinner" style={{ marginRight: 6 }} />Calculando...</> : <><i className="fa-solid fa-calculator" style={{ marginRight: 4 }} />Calcular Ahorros</>}
-                    </button>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+                    <h3 style={{ margin: 0, color: '#059669' }}><i className="fa-solid fa-piggy-bank" style={{ marginRight: 8 }} />Reporte de Ahorros{semanasSeleccionadas.length > 1 ? ` (${semanasSeleccionadas.length} semanas)` : ' Semanal'}</h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ position: 'relative' }}>
+                        <button
+                          onClick={() => setShowSemanasDropdown(!showSemanasDropdown)}
+                          style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 12, minWidth: 180, background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                        >
+                          <i className="fa-solid fa-calendar-week" />
+                          {semanasSeleccionadas.length === 0 ? 'Semana actual' : `${semanasSeleccionadas.length} semana${semanasSeleccionadas.length > 1 ? 's' : ''}`}
+                          <i className={`fa-solid fa-chevron-${showSemanasDropdown ? 'up' : 'down'}`} style={{ marginLeft: 'auto', fontSize: 10 }} />
+                        </button>
+                        {showSemanasDropdown && (
+                          <>
+                            <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setShowSemanasDropdown(false)} />
+                            <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, background: '#fff', border: '1px solid #d1d5db', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 999, minWidth: 220, maxHeight: 300, overflowY: 'auto' }}>
+                              <div style={{ padding: '6px 10px', borderBottom: '1px solid #e5e7eb', fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Seleccionar semanas</div>
+                              {getSemanasDisponibles().map(s => {
+                                const checked = semanasSeleccionadas.includes(s.value);
+                                return (
+                                  <label key={s.value} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer', fontSize: 12, background: checked ? '#f0fdf4' : 'transparent' }}
+                                    onMouseEnter={e => e.currentTarget.style.background = checked ? '#dcfce7' : '#f9fafb'}
+                                    onMouseLeave={e => e.currentTarget.style.background = checked ? '#f0fdf4' : 'transparent'}
+                                  >
+                                    <input type="checkbox" checked={checked} onChange={() => {
+                                      setSemanasSeleccionadas(prev => checked ? prev.filter(v => v !== s.value) : [...prev, s.value]);
+                                    }} style={{ accentColor: '#059669' }} />
+                                    Sem {s.label}
+                                  </label>
+                                );
+                              })}
+                              {semanasSeleccionadas.length > 0 && (
+                                <div style={{ padding: '6px 10px', borderTop: '1px solid #e5e7eb' }}>
+                                  <button onClick={() => setSemanasSeleccionadas([])} style={{ fontSize: 11, color: '#dc2626', background: 'none', border: 'none', cursor: 'pointer' }}>
+                                    <i className="fa-solid fa-xmark" style={{ marginRight: 4 }} />Limpiar seleccion
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <button onClick={loadAhorrosSemanal} disabled={ahorrosLoading} className="btn btn-primary" style={{ fontSize: 13, background: '#059669', border: 'none' }}>
+                        {ahorrosLoading ? <><span className="spinner" style={{ marginRight: 6 }} />Calculando...</> : <><i className="fa-solid fa-calculator" style={{ marginRight: 4 }} />Calcular Ahorros</>}
+                      </button>
+                    </div>
                   </div>
 
                   {ahorrosSemanal && (
@@ -2187,6 +2265,8 @@ export default function App() {
                                         <span><span style={{ color: '#4338ca', fontWeight: 600 }}>DT:</span> {a.bus} (S/{a.tarifa_original}) — {a.dias_dt || 1} dia{(a.dias_dt || 1) > 1 ? 's' : ''}</span>
                                       ) : a.tipo === 'baja' ? (
                                         <span><span style={{ color: '#dc2626', fontWeight: 600 }}>Baja:</span> {a.bus} (S/{a.tarifa_original})</span>
+                                      ) : a.tipo === 'intercambio' ? (
+                                        <span><span style={{ color: '#0891b2', fontWeight: 600 }}>Interc:</span> {a.placa_original} → {a.placa_nueva} (S/{a.tarifa_original} → S/{a.tarifa_nueva})</span>
                                       ) : (
                                         <span><span style={{ color: '#7c3aed', fontWeight: 600 }}>Unif:</span> {a.buses_origen?.join(', ')} → {a.placa_destino} (S/{a.tarifa_original} → S/{a.tarifa_nueva})</span>
                                       )}
@@ -2199,8 +2279,8 @@ export default function App() {
                                 <td style={{ fontWeight: 600, color: '#3b82f6' }}>
                                   {d.tarifa_optimizada > 0 ? `S/${d.tarifa_optimizada.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
                                 </td>
-                                <td style={{ fontWeight: 700, color: (d.tarifa_total - (d.tarifa_optimizada || 0)) > 0 ? '#059669' : 'var(--text-dim)' }}>
-                                  S/{((d.tarifa_total || 0) - (d.tarifa_optimizada || 0)).toLocaleString(undefined, {minimumFractionDigits:2})}
+                                <td style={{ fontWeight: 700, color: Math.max(0, (d.tarifa_total || 0) - (d.tarifa_optimizada || 0)) > 0 ? '#059669' : 'var(--text-dim)' }}>
+                                  S/{Math.max(0, (d.tarifa_total || 0) - (d.tarifa_optimizada || 0)).toLocaleString(undefined, {minimumFractionDigits:2})}
                                 </td>
                                 <td style={{ fontWeight: 600, color: d.ahorro_nuevo > 0 ? '#059669' : 'var(--text-dim)' }}>
                                   {d.ahorro_nuevo > 0 ? `S/${d.ahorro_nuevo.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
@@ -2237,7 +2317,7 @@ export default function App() {
                             dia: d.dia,
                             sinOpt: d.tarifa_total,
                             conOpt: d.tarifa_optimizada,
-                            diff: d.tarifa_total - d.tarifa_optimizada,
+                            diff: Math.max(0, d.tarifa_total - d.tarifa_optimizada),
                             dt: d.tarifa_dt || 0,
                             dolarKg: d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0,
                           })),
