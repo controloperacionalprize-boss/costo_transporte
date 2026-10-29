@@ -917,7 +917,7 @@ export default function App() {
   const [compEjecLoading, setCompEjecLoading] = useState(false);
 
   const [kilosExport, setKilosExport] = useState(null);
-  const [tipoCambio, setTipoCambio] = useState(3.75);
+  const tipoCambio = 3.36;
 
   const [intercambios, setIntercambios] = useState([]);
   const [showIntercambioModal, setShowIntercambioModal] = useState(false);
@@ -2245,9 +2245,6 @@ export default function App() {
                               <th>Nuevas Acciones</th>
                               <th>Costo Sin Optimizar</th>
                               <th>Costo Con Optimizar</th>
-                              <th>Diferencia</th>
-                              <th>Ahorro Nuevo</th>
-                              <th>Ahorro Previo</th>
                               <th>Ahorro del Día</th>
                               <th>Acumulado</th>
                               <th>$/kg</th>
@@ -2278,15 +2275,6 @@ export default function App() {
                                 </td>
                                 <td style={{ fontWeight: 600, color: '#3b82f6' }}>
                                   {d.tarifa_optimizada > 0 ? `S/${d.tarifa_optimizada.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
-                                </td>
-                                <td style={{ fontWeight: 700, color: Math.max(0, (d.tarifa_total || 0) - (d.tarifa_optimizada || 0)) > 0 ? '#059669' : 'var(--text-dim)' }}>
-                                  S/{Math.max(0, (d.tarifa_total || 0) - (d.tarifa_optimizada || 0)).toLocaleString(undefined, {minimumFractionDigits:2})}
-                                </td>
-                                <td style={{ fontWeight: 600, color: d.ahorro_nuevo > 0 ? '#059669' : 'var(--text-dim)' }}>
-                                  {d.ahorro_nuevo > 0 ? `S/${d.ahorro_nuevo.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
-                                </td>
-                                <td style={{ color: d.ahorro_previo > 0 ? '#0891b2' : 'var(--text-dim)' }}>
-                                  {d.ahorro_previo > 0 ? `S/${d.ahorro_previo.toLocaleString(undefined, {minimumFractionDigits:2})}` : '—'}
                                 </td>
                                 <td style={{ fontWeight: 700, color: d.ahorro_dia > 0 ? '#059669' : 'var(--text-dim)' }}>
                                   S/{d.ahorro_dia.toLocaleString(undefined, {minimumFractionDigits:2})}
@@ -2354,9 +2342,8 @@ export default function App() {
                               <i className="fa-solid fa-chart-column" style={{ marginRight: 6 }} />
                               Comparativo de Tarifa Semanal
                             </h4>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                              <span style={{ color: '#6b7280' }}>T.C:</span>
-                              <input type="number" step="0.01" value={tipoCambio} onChange={e => setTipoCambio(parseFloat(e.target.value) || 1)} style={{ width: 60, padding: '2px 6px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 12, fontWeight: 600 }} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#6b7280' }}>
+                              <span>T.C: <strong style={{ color: 'var(--text)' }}>{tipoCambio.toFixed(2)}</strong></span>
                             </div>
                           </div>
                           <ResponsiveContainer width="100%" height={400}>
