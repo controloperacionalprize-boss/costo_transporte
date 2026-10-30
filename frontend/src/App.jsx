@@ -2372,8 +2372,8 @@ export default function App() {
                               const totSin = ahorrosSemanal.dias?.reduce((s, d) => s + (d.tarifa_total || 0), 0) || 0;
                               const totCon = ahorrosSemanal.dias?.reduce((s, d) => s + (d.tarifa_optimizada || 0), 0) || 0;
                               const totAhorro = ahorrosSemanal.dias?.reduce((s, d) => s + (d.ahorro_dia || 0), 0) || 0;
-                              const totDkSin = ahorrosSemanal.dias?.reduce((s, d) => s + (d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0), 0) || 0;
-                              const totDkCon = ahorrosSemanal.dias?.reduce((s, d) => s + (d.kilos_export > 0 && d.tarifa_optimizada ? (d.tarifa_optimizada / d.kilos_export) / tipoCambio : 0), 0) || 0;
+                              const totDkSin = totKilos > 0 ? (totSin / totKilos) / tipoCambio : 0;
+                              const totDkCon = totKilos > 0 ? (totCon / totKilos) / tipoCambio : 0;
                               return (
                                 <tr style={{ background: '#f1f5f9', fontWeight: 800, borderTop: '2px solid #94a3b8' }}>
                                   <td>TOTAL</td>
