@@ -2309,7 +2309,8 @@ export default function App() {
                               <th>Costo Con Optimizar</th>
                               <th>Ahorro del Día</th>
                               <th>Acumulado</th>
-                              <th>$/kg</th>
+                              <th>$/kg Sin Opt</th>
+                              <th>$/kg Con Opt</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2348,6 +2349,9 @@ export default function App() {
                                 </td>
                                 <td style={{ fontWeight: 600, color: '#f59e0b' }}>
                                   {d.soles_por_kg ? `$${(d.soles_por_kg / tipoCambio).toFixed(2)}` : '—'}
+                                </td>
+                                <td style={{ fontWeight: 600, color: '#38bdf8' }}>
+                                  {d.kilos_export > 0 && d.tarifa_optimizada ? `$${((d.tarifa_optimizada / d.kilos_export) / tipoCambio).toFixed(2)}` : '—'}
                                 </td>
                               </tr>
                             ))}
