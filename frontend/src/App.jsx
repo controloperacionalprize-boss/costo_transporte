@@ -2360,8 +2360,10 @@ export default function App() {
                         const diasConData = ahorrosSemanal.dias.filter(d => d.tiene_data);
                         const totalKilos = diasConData.reduce((s, d) => s + (d.kilos_export || 0), 0);
                         const totalTarifaReal = diasConData.reduce((s, d) => s + (d.tarifa_real_dia || d.tarifa_total || 0), 0);
+                        const totalTarifaOpt = diasConData.reduce((s, d) => s + (d.tarifa_optimizada || 0), 0);
                         const dolarKgTotal = totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0;
                         const sumDolarKg = diasConData.reduce((s, d) => s + (d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0), 0);
+                        const sumDolarKgOpt = diasConData.reduce((s, d) => s + (d.kilos_export > 0 ? (d.tarifa_optimizada / d.kilos_export) / tipoCambio : 0), 0);
                         const maxDailyDk = Math.max(...diasConData.map(d => d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0));
                         const rightMax = Math.round(maxDailyDk * 150) / 100;
                         const getSemanaISO = (fechaStr) => {
@@ -2383,8 +2385,9 @@ export default function App() {
                             diff: Math.max(0, d.tarifa_total - d.tarifa_optimizada),
                             dt: d.tarifa_dt || 0,
                             dolarKg: d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0,
+                            dolarKgOpt: d.kilos_export > 0 ? (d.tarifa_optimizada / d.kilos_export) / tipoCambio : 0,
                           })),
-                          { dia: 'Total', semana: '', sinOpt: 0, conOpt: 0, diff: 0, dolarKgBar: sumDolarKg, dolarKgProm: totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0 },
+                          { dia: 'Total', semana: '', sinOpt: 0, conOpt: 0, diff: 0, dolarKgBar: sumDolarKg, dolarKgOptBar: sumDolarKgOpt, dolarKgProm: totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0 },
                         ];
                         const DiaSemanaTick = ({ x, y, payload, index }) => {
                           const entry = chartData[index];
@@ -2440,21 +2443,30 @@ export default function App() {
                               <YAxis yAxisId="rightBar" orientation="right" hide={true} />
                               <RTooltip
                                 formatter={(v, name) => {
-                                  if (name === 'dolarKg') return [`$${v.toFixed(4)}`, '$/kg diario'];
-                                  if (name === 'dolarKgBar') return [`$${v.toFixed(4)}`, 'Sum $/kg'];
+                                  if (name === 'dolarKg') return [`$${v.toFixed(4)}`, '$/kg sin opt'];
+                                  if (name === 'dolarKgOpt') return [`$${v.toFixed(4)}`, '$/kg con opt'];
+                                  if (name === 'dolarKgBar') return [`$${v.toFixed(4)}`, 'Sum $/kg sin opt'];
+                                  if (name === 'dolarKgOptBar') return [`$${v.toFixed(4)}`, 'Sum $/kg con opt'];
                                   if (name === 'dolarKgProm') return [`$${v.toFixed(2)}`, '$/kg (Tarifa/Kilos)'];
                                   return [`S/${v.toLocaleString(undefined, {minimumFractionDigits:2})}`, name === 'sinOpt' ? 'Sin optimizar' : name === 'conOpt' ? 'Con optimizacion' : name === 'dt' ? 'DT' : 'Ahorro'];
                                 }}
                                 labelFormatter={l => l}
                                 contentStyle={{ borderRadius: 8, fontSize: 12, border: '1px solid var(--border)' }}
                               />
-                              <Legend formatter={v => v === 'sinOpt' ? 'Sin optimizar' : v === 'conOpt' ? 'Con optimizacion' : v === 'dt' ? 'DT' : v === 'dolarKg' ? '$/kg diario' : v === 'dolarKgBar' ? 'Sum $/kg' : v === 'dolarKgProm' ? '$/kg (Tarifa/Kilos)' : 'Ahorro'} wrapperStyle={{ fontSize: 12 }} />
+                              <Legend formatter={v => v === 'sinOpt' ? 'Sin optimizar' : v === 'conOpt' ? 'Con optimizacion' : v === 'dt' ? 'DT' : v === 'dolarKg' ? '$/kg sin opt' : v === 'dolarKgOpt' ? '$/kg con opt' : v === 'dolarKgBar' ? 'Sum $/kg sin opt' : v === 'dolarKgOptBar' ? 'Sum $/kg con opt' : v === 'dolarKgProm' ? '$/kg (Tarifa/Kilos)' : 'Ahorro'} wrapperStyle={{ fontSize: 12 }} />
                               <Bar yAxisId="left" dataKey="sinOpt" fill="#ef4444" radius={[6,6,0,0]} label={<CustomLabel fill="#ef4444" />} />
                               <Bar yAxisId="left" dataKey="conOpt" fill="#3b82f6" radius={[6,6,0,0]} label={<CustomLabel fill="#3b82f6" />} />
                               <Bar yAxisId="left" dataKey="diff" fill="#22c55e" radius={[6,6,0,0]} label={<CustomLabel fill="#22c55e" />} />
                               <Bar yAxisId="left" dataKey="dt" fill="#4338ca" radius={[6,6,0,0]} label={<CustomLabel fill="#4338ca" />} />
                               <Line yAxisId="right" type="monotone" dataKey="dolarKg" stroke="#f59e0b" strokeWidth={2} dot={{ r: 5, fill: '#f59e0b' }} label={{ fontSize: 10, fontWeight: 700, fill: '#f59e0b', formatter: v => v ? `$${v.toFixed(2)}` : '', position: 'top' }} connectNulls={false} />
+                              <Line yAxisId="right" type="monotone" dataKey="dolarKgOpt" stroke="#38bdf8" strokeWidth={2} dot={{ r: 5, fill: '#38bdf8' }} label={{ fontSize: 10, fontWeight: 700, fill: '#38bdf8', formatter: v => v ? `$${v.toFixed(2)}` : '', position: 'bottom' }} connectNulls={false} />
                               <Bar yAxisId="rightBar" dataKey="dolarKgBar" fill="#f59e0b" radius={[6,6,0,0]} label={({ x, y, width, height, value }) => {
+                                if (!value) return null;
+                                const cx = x + width / 2;
+                                const cy = y + height / 2;
+                                return <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={11} fontWeight={700} fill="#fff" transform={`rotate(-90, ${cx}, ${cy})`}>${value.toFixed(2)}</text>;
+                              }} />
+                              <Bar yAxisId="rightBar" dataKey="dolarKgOptBar" fill="#38bdf8" radius={[6,6,0,0]} label={({ x, y, width, height, value }) => {
                                 if (!value) return null;
                                 const cx = x + width / 2;
                                 const cy = y + height / 2;
