@@ -2372,6 +2372,8 @@ export default function App() {
                               const totSin = ahorrosSemanal.dias?.reduce((s, d) => s + (d.tarifa_total || 0), 0) || 0;
                               const totCon = ahorrosSemanal.dias?.reduce((s, d) => s + (d.tarifa_optimizada || 0), 0) || 0;
                               const totAhorro = ahorrosSemanal.dias?.reduce((s, d) => s + (d.ahorro_dia || 0), 0) || 0;
+                              const totDkSin = ahorrosSemanal.dias?.reduce((s, d) => s + (d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0), 0) || 0;
+                              const totDkCon = ahorrosSemanal.dias?.reduce((s, d) => s + (d.kilos_export > 0 && d.tarifa_optimizada ? (d.tarifa_optimizada / d.kilos_export) / tipoCambio : 0), 0) || 0;
                               return (
                                 <tr style={{ background: '#f1f5f9', fontWeight: 800, borderTop: '2px solid #94a3b8' }}>
                                   <td>TOTAL</td>
@@ -2380,7 +2382,10 @@ export default function App() {
                                   <td>S/{totSin.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                                   <td style={{ color: '#3b82f6' }}>S/{totCon.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
                                   <td style={{ color: '#059669' }}>S/{totAhorro.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
-                                  <td colSpan={4}></td>
+                                  <td></td>
+                                  <td style={{ color: '#f59e0b' }}>${totDkSin.toFixed(2)}</td>
+                                  <td style={{ color: '#38bdf8' }}>${totDkCon.toFixed(2)}</td>
+                                  <td style={{ color: '#059669' }}>${(totDkSin - totDkCon).toFixed(2)}</td>
                                 </tr>
                               );
                             })()}
