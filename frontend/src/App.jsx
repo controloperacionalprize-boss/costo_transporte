@@ -2386,8 +2386,8 @@ export default function App() {
                           })),
                           { dia: 'Total', semana: '', sinOpt: 0, conOpt: 0, diff: 0, dolarKgBar: sumDolarKg, dolarKgProm: totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0 },
                         ];
-                        const DiaSemanaTick = ({ x, y, payload }) => {
-                          const entry = chartData.find(c => c.dia === payload.value);
+                        const DiaSemanaTick = ({ x, y, payload, index }) => {
+                          const entry = chartData[index];
                           const sem = entry?.semana || '';
                           return (
                             <g transform={`translate(${x},${y})`}>
