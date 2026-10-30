@@ -1745,6 +1745,97 @@ def eliminar_intercambio(intercambio_id: int):
     }
 
 
+# ─── Rebajas de Tarifa ─────────────────────────────────────────────────────
+
+def _ensure_rebajas_table():
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS rebajas_tarifa (
+            id SERIAL PRIMARY KEY,
+            fecha DATE NOT NULL,
+            empresa VARCHAR(100),
+            denominacion VARCHAR(200),
+            bus VARCHAR(20) NOT NULL,
+            tarifa_original NUMERIC(12,2) DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+class RebajaRequest(BaseModel):
+    fecha: str
+    empresa: str = ""
+    denominacion: str = ""
+    bus: str = ""
+    tarifa_original: float = 0
+
+
+@app.post("/api/rebajas")
+def crear_rebaja(req: RebajaRequest):
+    _ensure_rebajas_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO rebajas_tarifa (fecha, empresa, denominacion, bus, tarifa_original)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (req.fecha, req.empresa, req.denominacion, req.bus.strip().upper(), req.tarifa_original))
+    conn.commit()
+    cur.execute("""
+        SELECT id, fecha, bus, tarifa_original FROM rebajas_tarifa
+        WHERE fecha = %s ORDER BY created_at
+    """, (req.fecha,))
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "status": "ok",
+        "rebajas": [{"id": r[0], "fecha": str(r[1]), "bus": r[2], "tarifa_original": float(r[3])} for r in rows]
+    }
+
+
+@app.get("/api/rebajas")
+def get_rebajas(fecha: str = Query(""), empresa: str = Query("")):
+    _ensure_rebajas_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, fecha, bus, tarifa_original FROM rebajas_tarifa
+        WHERE fecha = %s ORDER BY created_at
+    """, (fecha,))
+    rows = cur.fetchall()
+    conn.close()
+    return {
+        "rebajas": [{"id": r[0], "fecha": str(r[1]), "bus": r[2], "tarifa_original": float(r[3])} for r in rows]
+    }
+
+
+@app.delete("/api/rebajas/{rebaja_id}")
+def eliminar_rebaja(rebaja_id: int):
+    _ensure_rebajas_table()
+    conn = _get_db_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT fecha FROM rebajas_tarifa WHERE id = %s", (rebaja_id,))
+    row = cur.fetchone()
+    fecha = row[0] if row else None
+    cur.execute("DELETE FROM rebajas_tarifa WHERE id = %s", (rebaja_id,))
+    conn.commit()
+    if fecha:
+        cur.execute("""
+            SELECT id, fecha, bus, tarifa_original FROM rebajas_tarifa
+            WHERE fecha = %s ORDER BY created_at
+        """, (fecha,))
+        rows = cur.fetchall()
+    else:
+        rows = []
+    conn.close()
+    return {
+        "status": "ok",
+        "rebajas": [{"id": r[0], "fecha": str(r[1]), "bus": r[2], "tarifa_original": float(r[3])} for r in rows]
+    }
+
+
 # ─── Rutas Mapa ────────────────────────────────────────────────────────────
 ZONAS_COORDS = {
     "CASA GRANDE": {"lat": -7.7446, "lng": -79.1881},
@@ -2342,6 +2433,29 @@ def ahorros_semanal(req: AhorroSemanalRequest):
                     "ahorro": round(ahorro, 2),
                 })
                 acciones_activas.append({"tipo": "intercambio", "placa_original": ic["placa_original"], "placa_nueva": ic["placa_nueva"], "ahorro_diario": round(ahorro, 2), "desde": dia_sig})
+
+            # Calculate savings from rebajas
+            try:
+                cur.execute("""
+                    SELECT bus, tarifa_original FROM rebajas_tarifa WHERE fecha = %s
+                """, (dia_str,))
+                rebajas_dia = [{"bus": r[0], "tarifa_original": float(r[1])} for r in cur.fetchall()]
+            except Exception:
+                conn.rollback()
+                rebajas_dia = []
+            for rb in rebajas_dia:
+                tarifa_nueva = _get_tarifa_bus(dia_sig, rb["bus"])
+                if tarifa_nueva == 0:
+                    tarifa_nueva = _get_tarifa_bus(dia_str, rb["bus"])
+                ahorro = max(0, rb["tarifa_original"] - tarifa_nueva)
+                detalle_dia.append({
+                    "tipo": "rebaja",
+                    "bus": rb["bus"],
+                    "tarifa_original": round(rb["tarifa_original"], 2),
+                    "tarifa_nueva": round(tarifa_nueva, 2),
+                    "ahorro": round(ahorro, 2),
+                })
+                acciones_activas.append({"tipo": "rebaja", "bus": rb["bus"], "ahorro_diario": round(ahorro, 2), "desde": dia_sig})
 
             # Savings only from actions started on previous days (desde <= today)
             ahorro_activo = sum(a["ahorro_diario"] for a in acciones_activas if a["desde"] <= dia_str)

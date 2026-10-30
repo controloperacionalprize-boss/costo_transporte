@@ -920,6 +920,7 @@ export default function App() {
   const tipoCambio = 3.36;
 
   const [intercambios, setIntercambios] = useState([]);
+  const [rebajas, setRebajas] = useState([]);
   const [showIntercambioModal, setShowIntercambioModal] = useState(false);
   const [showDTModal, setShowDTModal] = useState(false);
   const [dtDias, setDtDias] = useState(1);
@@ -1454,6 +1455,40 @@ export default function App() {
     } catch {}
   };
 
+  const darRebaja = async () => {
+    if (selectedBuses.size !== 1) return;
+    const bus = [...selectedBuses][0];
+    const busRow = cruce.find(r => r.BUS === bus.toUpperCase());
+    const tarifaOriginal = busRow ? (busRow.TARIFA || 0) : 0;
+    if (tarifaOriginal <= 0) { alert('El bus no tiene tarifa registrada hoy'); return; }
+    setActionLoading(true);
+    try {
+      const res = await api('/api/rebajas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fecha: dbStatus?.fecha || '',
+          empresa: dbStatus?.empresa || '',
+          denominacion: dbStatus?.denominacion || '',
+          bus,
+          tarifa_original: tarifaOriginal,
+        }),
+      });
+      if (res.status === 'ok') {
+        setRebajas(res.rebajas || []);
+        setSelectedBuses(new Set());
+        gridRef.current?.api?.deselectAll();
+      }
+    } catch (e) { alert('Error: ' + e.message); } finally { setActionLoading(false); }
+  };
+
+  const eliminarRebaja = async (id) => {
+    try {
+      const res = await api('/api/rebajas/' + id, { method: 'DELETE' });
+      if (res.status === 'ok') setRebajas(res.rebajas || []);
+    } catch {}
+  };
+
   const eliminarUnificacion = async (id) => {
     try {
       const res = await api('/api/unificaciones/' + id, { method: 'DELETE' });
@@ -1465,14 +1500,16 @@ export default function App() {
     const f = fechaOverride || dbStatus?.fecha;
     if (!f) return;
     try {
-      const [resUnif, resEjec, resInter, resDT] = await Promise.all([
+      const [resUnif, resEjec, resInter, resDT, resReb] = await Promise.all([
         api(`/api/unificaciones?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
         api(`/api/ejecutados?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}`),
         api(`/api/intercambios?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
         api(`/api/dt?session_id=${SESSION_ID}&fecha=${encodeURIComponent(f)}`),
+        api(`/api/rebajas?fecha=${encodeURIComponent(f)}&empresa=${encodeURIComponent(dbStatus?.empresa || '')}`),
       ]);
       setUnificaciones(resUnif.unificaciones || []);
       setIntercambios(resInter.intercambios || []);
+      setRebajas(resReb.rebajas || []);
       const ejec = new Set([
         ...(resUnif.unificaciones || []).flatMap(u => u.buses_origen || []),
         ...(resEjec.ejecutados_db || []),
@@ -1916,10 +1953,16 @@ export default function App() {
                     </button>
                   )}
                   {selectedBuses.size === 1 && (
-                    <button onClick={() => { setIntercambioPlacaOriginal([...selectedBuses][0]); setShowIntercambioModal(true); }} className="btn" style={{ background: '#2563eb', color: '#fff', border: 'none' }}>
-                      <i className="fa-solid fa-right-left" style={{ marginRight: 4 }} />
-                      Intercambiar
-                    </button>
+                    <>
+                      <button onClick={() => { setIntercambioPlacaOriginal([...selectedBuses][0]); setShowIntercambioModal(true); }} className="btn" style={{ background: '#2563eb', color: '#fff', border: 'none' }}>
+                        <i className="fa-solid fa-right-left" style={{ marginRight: 4 }} />
+                        Intercambiar
+                      </button>
+                      <button onClick={darRebaja} disabled={actionLoading} className="btn" style={{ background: '#059669', color: '#fff', border: 'none', opacity: actionLoading ? 0.6 : 1 }}>
+                        {actionLoading ? <i className="fa-solid fa-spinner fa-spin" style={{ marginRight: 4 }} /> : <i className="fa-solid fa-arrow-trend-down" style={{ marginRight: 4 }} />}
+                        Rebaja
+                      </button>
+                    </>
                   )}
                   {selectedBuses.size > 0 && (
                     <>
@@ -1962,6 +2005,25 @@ export default function App() {
                         Intercambios: {intercambios.length}
                       </span>
                     )}
+                    {rebajas.length > 0 && (
+                      <span style={{ color: '#059669', fontWeight: 600 }}>
+                        <i className="fa-solid fa-arrow-trend-down" style={{ marginRight: 4 }} />
+                        Rebajas: {rebajas.length}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {rebajas.length > 0 && (
+                  <div style={{ marginTop: 10, padding: 12, background: '#f0fdf4', borderRadius: 8, border: '1px solid #bbf7d0' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#059669', marginBottom: 8 }}>Rebajas de tarifa registradas:</div>
+                    {rebajas.map(rb => (
+                      <div key={rb.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0' }}>
+                        <span><strong>{rb.bus}</strong> — tarifa base S/{rb.tarifa_original.toLocaleString(undefined, { minimumFractionDigits: 2 })} (ahorro desde mañana)</span>
+                        <button onClick={() => eliminarRebaja(rb.id)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 11 }}>
+                          <i className="fa-solid fa-xmark" /> Quitar
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {unificaciones.length > 0 && (
@@ -2264,6 +2326,8 @@ export default function App() {
                                         <span><span style={{ color: '#dc2626', fontWeight: 600 }}>Baja:</span> {a.bus} (S/{a.tarifa_original})</span>
                                       ) : a.tipo === 'intercambio' ? (
                                         <span><span style={{ color: '#0891b2', fontWeight: 600 }}>Interc:</span> {a.placa_original} → {a.placa_nueva} (S/{a.tarifa_original} → S/{a.tarifa_nueva})</span>
+                                      ) : a.tipo === 'rebaja' ? (
+                                        <span><span style={{ color: '#059669', fontWeight: 600 }}>Rebaja:</span> {a.bus} (S/{a.tarifa_original} → S/{a.tarifa_nueva})</span>
                                       ) : (
                                         <span><span style={{ color: '#7c3aed', fontWeight: 600 }}>Unif:</span> {a.buses_origen?.join(', ')} → {a.placa_destino} (S/{a.tarifa_original} → S/{a.tarifa_nueva})</span>
                                       )}
