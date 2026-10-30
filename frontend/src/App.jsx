@@ -2362,7 +2362,7 @@ export default function App() {
                                 </td>
                                 <td style={{ fontWeight: 700, color: '#059669' }}>
                                   {d.kilos_export > 0 && d.tarifa_optimizada && d.soles_por_kg
-                                    ? `$${((d.soles_por_kg / tipoCambio) - ((d.tarifa_optimizada / d.kilos_export) / tipoCambio)).toFixed(2)}`
+                                    ? `$${(parseFloat((d.soles_por_kg / tipoCambio).toFixed(2)) - parseFloat(((d.tarifa_optimizada / d.kilos_export) / tipoCambio).toFixed(2))).toFixed(2)}`
                                     : '—'}
                                 </td>
                               </tr>
