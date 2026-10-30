@@ -2364,17 +2364,38 @@ export default function App() {
                         const sumDolarKg = diasConData.reduce((s, d) => s + (d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0), 0);
                         const maxDailyDk = Math.max(...diasConData.map(d => d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0));
                         const rightMax = Math.round(maxDailyDk * 150) / 100;
+                        const getSemanaISO = (fechaStr) => {
+                          if (!fechaStr) return '';
+                          const d = new Date(fechaStr + 'T00:00:00');
+                          const target = new Date(d.valueOf());
+                          const dayNr = (d.getDay() + 6) % 7;
+                          target.setDate(target.getDate() - dayNr + 3);
+                          const firstThursday = new Date(target.getFullYear(), 0, 4);
+                          const diff = target - firstThursday;
+                          return 1 + Math.round(diff / (7 * 24 * 3600 * 1000));
+                        };
                         const chartData = [
                           ...diasConData.map(d => ({
                             dia: d.dia,
+                            semana: d.fecha ? `Sem ${getSemanaISO(d.fecha)}` : '',
                             sinOpt: d.tarifa_total,
                             conOpt: d.tarifa_optimizada,
                             diff: Math.max(0, d.tarifa_total - d.tarifa_optimizada),
                             dt: d.tarifa_dt || 0,
                             dolarKg: d.soles_por_kg ? d.soles_por_kg / tipoCambio : 0,
                           })),
-                          { dia: 'Total', sinOpt: 0, conOpt: 0, diff: 0, dolarKgBar: sumDolarKg, dolarKgProm: totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0 },
+                          { dia: 'Total', semana: '', sinOpt: 0, conOpt: 0, diff: 0, dolarKgBar: sumDolarKg, dolarKgProm: totalKilos > 0 ? (totalTarifaReal / totalKilos) / tipoCambio : 0 },
                         ];
+                        const DiaSemanaTick = ({ x, y, payload }) => {
+                          const entry = chartData.find(c => c.dia === payload.value);
+                          const sem = entry?.semana || '';
+                          return (
+                            <g transform={`translate(${x},${y})`}>
+                              <text x={0} y={0} dy={14} textAnchor="middle" fontSize={12} fontWeight={600} fill="#334155">{payload.value}</text>
+                              {sem && <text x={0} y={0} dy={28} textAnchor="middle" fontSize={10} fontWeight={500} fill="#94a3b8">{sem}</text>}
+                            </g>
+                          );
+                        };
                         const fmtK = v => Math.round(v).toLocaleString();
                         const CustomLabel = ({ x, y, width, height, value }) => {
                           if (!value) return null;
@@ -2411,9 +2432,9 @@ export default function App() {
                             </div>
                           </div>
                           <ResponsiveContainer width="100%" height={400}>
-                            <ComposedChart data={chartData} barGap={2} barCategoryGap="25%" margin={{ top: 15, right: 50, left: 10, bottom: 5 }}>
+                            <ComposedChart data={chartData} barGap={2} barCategoryGap="25%" margin={{ top: 15, right: 50, left: 10, bottom: 20 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                              <XAxis dataKey="dia" tick={{ fontSize: 12, fontWeight: 600 }} axisLine={false} tickLine={false} />
+                              <XAxis dataKey="dia" tick={<DiaSemanaTick />} axisLine={false} tickLine={false} interval={0} height={45} />
                               <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={v => `S/${fmtK(v)}`} axisLine={false} tickLine={false} />
                               <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickFormatter={v => `$${v.toFixed(2)}`} axisLine={false} tickLine={false} domain={[0, rightMax]} />
                               <YAxis yAxisId="rightBar" orientation="right" hide={true} />
