@@ -2292,6 +2292,10 @@ export default function App() {
                           <div style={{ fontSize: 11, fontWeight: 700, color: '#059669', textTransform: 'uppercase' }}>Ahorro Total Semanal</div>
                           <div style={{ fontSize: 24, fontWeight: 800, color: '#059669' }}>S/{ahorrosSemanal.ahorro_total_semanal?.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</div>
                         </div>
+                        <div style={{ flex: '1 1 150px', padding: '12px 16px', borderRadius: 10, background: '#eff6ff', border: '1px solid #bfdbfe', textAlign: 'center' }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase' }}>Ahorro Total en US$</div>
+                          <div style={{ fontSize: 24, fontWeight: 800, color: '#2563eb' }}>${((ahorrosSemanal.ahorro_total_semanal || 0) / tipoCambio).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</div>
+                        </div>
                         <div style={{ flex: '1 1 150px', padding: '12px 16px', borderRadius: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', textAlign: 'center' }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: '#059669', textTransform: 'uppercase' }}>Acciones ejecutadas</div>
                           <div style={{ fontSize: 24, fontWeight: 800, color: '#059669' }}>{ahorrosSemanal.total_acciones}</div>
@@ -2303,6 +2307,7 @@ export default function App() {
                           <thead>
                             <tr>
                               <th>Día</th>
+                              <th>Kilos</th>
                               <th>Fecha</th>
                               <th>Nuevas Acciones</th>
                               <th>Costo Sin Optimizar</th>
@@ -2311,12 +2316,14 @@ export default function App() {
                               <th>Acumulado</th>
                               <th>$/kg Sin Opt</th>
                               <th>$/kg Con Opt</th>
+                              <th>Diferencia $/kg</th>
                             </tr>
                           </thead>
                           <tbody>
                             {ahorrosSemanal.dias?.map((d, i) => (
                               <tr key={i} style={d.ahorro_dia > 0 ? { background: '#f0fdf410' } : {}}>
                                 <td style={{ fontWeight: 600 }}>{d.dia}</td>
+                                <td style={{ color: '#6366f1', fontWeight: 600 }}>{d.kilos_export > 0 ? `${d.kilos_export.toLocaleString(undefined, {maximumFractionDigits:0})} kg` : '—'}</td>
                                 <td>{d.fecha}</td>
                                 <td>
                                   {d.nuevas_acciones?.length > 0 ? d.nuevas_acciones.map((a, j) => (
@@ -2353,8 +2360,30 @@ export default function App() {
                                 <td style={{ fontWeight: 600, color: '#38bdf8' }}>
                                   {d.kilos_export > 0 && d.tarifa_optimizada ? `$${((d.tarifa_optimizada / d.kilos_export) / tipoCambio).toFixed(2)}` : '—'}
                                 </td>
+                                <td style={{ fontWeight: 700, color: '#059669' }}>
+                                  {d.kilos_export > 0 && d.tarifa_optimizada && d.soles_por_kg
+                                    ? `$${((d.soles_por_kg / tipoCambio) - ((d.tarifa_optimizada / d.kilos_export) / tipoCambio)).toFixed(2)}`
+                                    : '—'}
+                                </td>
                               </tr>
                             ))}
+                            {(() => {
+                              const totKilos = ahorrosSemanal.dias?.reduce((s, d) => s + (d.kilos_export || 0), 0) || 0;
+                              const totSin = ahorrosSemanal.dias?.reduce((s, d) => s + (d.tarifa_total || 0), 0) || 0;
+                              const totCon = ahorrosSemanal.dias?.reduce((s, d) => s + (d.tarifa_optimizada || 0), 0) || 0;
+                              const totAhorro = ahorrosSemanal.dias?.reduce((s, d) => s + (d.ahorro_dia || 0), 0) || 0;
+                              return (
+                                <tr style={{ background: '#f1f5f9', fontWeight: 800, borderTop: '2px solid #94a3b8' }}>
+                                  <td>TOTAL</td>
+                                  <td style={{ color: '#6366f1' }}>{totKilos > 0 ? `${totKilos.toLocaleString(undefined, {maximumFractionDigits:0})} kg` : '—'}</td>
+                                  <td colSpan={2}></td>
+                                  <td>S/{totSin.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                  <td style={{ color: '#3b82f6' }}>S/{totCon.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                  <td style={{ color: '#059669' }}>S/{totAhorro.toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+                                  <td colSpan={4}></td>
+                                </tr>
+                              );
+                            })()}
                           </tbody>
                         </table>
                       </div>
